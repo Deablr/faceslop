@@ -47,8 +47,10 @@ docker compose down -v            # ...and this deletes it (Facebook sessions, f
 The image is Node 22 (Debian bookworm slim) plus Playwright's Chromium and its system libraries,
 `tini` as the init process, and the built server (`.output`). Nothing else from the repository
 goes in: no source, no dev dependencies. It runs as the unprivileged `node` user, with
-`/app/.data` on a named volume (mode 0700). Compose publishes the port on the host's **loopback
-only** (`127.0.0.1:...`), gives Chromium 1 GB of shared memory, and health-checks `/api/health`.
+`/app/.data` on a named volume (mode 0700). Compose gives Chromium 1 GB of shared memory and
+health-checks `/api/health`. `compose.yaml` publishes no port (for Dokploy); locally, `docker
+compose up` also reads `compose.override.yaml`, which publishes it on the host's **loopback only**
+(`127.0.0.1:...`).
 `APP_PASSWORD`, `FACESLOP_PUBLIC_URL` and `FACESLOP_TRUST_PROXY` are passed through from your
 shell or an `.env` file (see [Configuration](#configuration)).
 
@@ -153,8 +155,19 @@ memory: 2 GB of RAM or more), and a domain name.
    S3 destination on a schedule; turn on **Turn off Container** so the database is copied while
    nothing writes to it. Restoring needs a volume that doesn't exist yet and the app stopped.
 
+**Or as a Compose service.** Instead of steps 2 to 7: add a service of type **Compose** (Compose
+Type **Docker Compose**), choose the repository and branch, and set **Compose Path**
+`./compose.yaml`. Put the same three variables in **Environment** (Dokploy writes them to an `.env`
+file that compose reads). In **Domains**, add the domain with **Service Name** `faceslop`,
+**Container Port** `3000`, **HTTPS** on and **Certificate** `letsencrypt`: Dokploy adds the
+Traefik labels and its network to the service when it deploys. `compose.yaml` publishes no port
+(the loopback port in `compose.override.yaml` is for local use, and Dokploy doesn't read that
+file) and declares the `faceslop-data` volume itself (Dokploy prefixes its name with the app's).
+There is no Swarm setting to change: `docker compose up` stops the old container before it starts
+the new one.
+
 With the GitHub provider, Dokploy redeploys on every push to the branch. With Stop First (step
-6), redeploys keep the volume and every session, so nobody has to log in again. Unknown host
+6) or Compose, redeploys keep the volume and every session, so nobody has to log in again. Unknown host
 names are refused (only your domain and `localhost` are answered), every response carries HSTS,
 and the session cookie is `Secure`.
 
@@ -179,7 +192,7 @@ Environment variables (all optional):
 | `FACESLOP_DISABLE_CHECKER` | unset | `1`: no background Facebook work (no saved-search checks, favorite refreshes or saved-search baselines). For tests and smoke runs. |
 | `NODE_ENV` | `production` under `npm start` | |
 
-Compose also reads `FACESLOP_PORT` (the host port, default 3000).
+Local compose (`compose.override.yaml`) also reads `FACESLOP_PORT` (the host port, default 3000).
 
 At startup, `npm start` (and the image) refuses a public URL without a password, and warns about a
 public URL without `FACESLOP_TRUST_PROXY`, a public URL that isn't https, and an app password

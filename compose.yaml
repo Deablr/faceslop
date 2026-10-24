@@ -5,15 +5,23 @@
 #   docker compose logs -f faceslop
 #   docker compose down                   # data (Facebook sessions, favorites, ...) stays in the volume
 #
-# The port is published on the host's loopback (127.0.0.1) only: the container carries Facebook
-# sessions. Variables passed through from your shell (or an .env file next to this one):
+# This file publishes no port. On your own machine, `docker compose up` also reads
+# compose.override.yaml, which publishes it on the host's loopback (127.0.0.1) only: the container
+# carries Facebook sessions. On Dokploy (a Compose service with Compose Path ./compose.yaml), the
+# override is never read (Dokploy runs `docker compose -f compose.yaml`): add the domain in the
+# Domains tab (service faceslop, container port 3000, HTTPS) and Dokploy connects Traefik to the
+# container over its own network (README.md, "Deploy on Dokploy").
+#
+# Variables passed through from your shell or an .env file next to this one (on Dokploy: the
+# Environment tab):
 #
 #   APP_PASSWORD          a password for faceslop itself (not Facebook), entered once per browser.
 #                         Required for anything beyond this machine; use a long random value
 #                         (e.g. `openssl rand -base64 24`). Changing it signs every browser out of
 #                         faceslop (not out of Facebook).
-#   FACESLOP_PUBLIC_URL   the https URL people use when a reverse proxy on this host (Caddy, nginx,
-#                         ...) forwards to 127.0.0.1:${FACESLOP_PORT}. Only that host name and
+#   FACESLOP_PUBLIC_URL   the https URL people use when a reverse proxy is in front (Traefik on
+#                         Dokploy; or Caddy, nginx, ... on this host forwarding to
+#                         127.0.0.1:${FACESLOP_PORT}). Only that host name and
 #                         loopback are answered, cookies are Secure, and the server refuses to
 #                         start without APP_PASSWORD.
 #   FACESLOP_TRUST_PROXY  1 when such a proxy is in front: faceslop then trusts its X-Forwarded-For
@@ -27,15 +35,12 @@
 #   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 #   proxy_set_header X-Forwarded-Proto $scheme;
 #
-# For LAN use without a proxy, set APP_PASSWORD and change the published address yourself (e.g.
-# "0.0.0.0:3000:3000"); the app password then gates every API call. On Dokploy, don't use this
-# file: create an Application with Build Type "Dockerfile" (README.md, "Deploy on Dokploy").
+# For LAN use without a proxy, set APP_PASSWORD and change the published address in
+# compose.override.yaml (e.g. "0.0.0.0:3000:3000"); the app password then gates every API call.
 services:
   faceslop:
     build: .
     image: faceslop:latest
-    ports:
-      - "127.0.0.1:${FACESLOP_PORT:-3000}:3000"
     environment:
       HOST: 0.0.0.0
       PORT: "3000"

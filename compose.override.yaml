@@ -1,0 +1,8 @@
+# Local additions to compose.yaml: `docker compose up` in this directory reads this file too.
+# Publishes faceslop on this machine's loopback (127.0.0.1) only: the container carries Facebook
+# sessions. Dokploy never reads it (it runs `docker compose -f compose.yaml`; Traefik reaches the
+# container over Dokploy's network), so the server's host ports stay free.
+services:
+  faceslop:
+    ports:
+      - "127.0.0.1:${FACESLOP_PORT:-3000}:3000"
