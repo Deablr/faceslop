@@ -1,0 +1,51 @@
+<!doctype html>
+<!-- A listing that only shows a "Message" button; clicking it opens a dialog with the composer.
+     An unrelated Messenger chat with someone else is already open (a pre-existing dialog) and must
+     never be used. window.__mode = 'login' makes the button open a login dialog instead.
+     Test-only hooks: window.__mode, window.__sent, window.__chatSent, window.__sendClicks. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>Marketplace – Couch | Facebook</title>
+<style>div[role="button"] { display: inline-block; padding: 6px 12px; background: #e4e6eb; cursor: pointer; }
+[contenteditable] { min-height: 30px; width: 200px; border: 1px solid #ccc; }
+div[role="dialog"] { border: 1px solid #999; padding: 12px; margin: 8px; }</style></head>
+<body>
+<div role="main">
+  <h1><span>Grey couch</span></h1>
+  <div role="button" aria-label="Message" tabindex="0" data-fixture="open"><span>Message</span></div>
+</div>
+<div role="complementary">
+  <div role="dialog" aria-label="Chat with Bob">
+    <span>Bob</span>
+    <div contenteditable="true" role="textbox" aria-label="Message"><p><br></p></div>
+    <div role="button" aria-label="Press enter to send" tabindex="0" data-fixture="chat-send"></div>
+  </div>
+</div>
+<script>
+  window.__mode = 'ok';
+  window.__sent = [];
+  window.__chatSent = [];
+  window.__sendClicks = 0;
+  document.querySelector('[data-fixture="chat-send"]').addEventListener('click', (e) => {
+    window.__chatSent.push(e.target.closest('[role="dialog"]').querySelector('[role="textbox"]').innerText);
+  });
+  document.querySelector('[data-fixture="open"]').addEventListener('click', () => {
+    setTimeout(() => {
+      const dialog = document.createElement('div');
+      dialog.setAttribute('role', 'dialog');
+      if (window.__mode === 'login') {
+        dialog.innerHTML = '<span>See more on Facebook</span><form><input type="text" name="email" aria-label="Email or phone number"><input type="password" name="pass" aria-label="Password"><div role="button" aria-label="Log in to Facebook">Log In</div></form>';
+        document.body.append(dialog);
+        return;
+      }
+      dialog.innerHTML = '<div><span>Ask the seller</span></div><div><textarea>Hi, is this still available?</textarea></div><div><div role="button" tabindex="0" aria-label="Send Message">Send Message</div></div>';
+      document.body.append(dialog);
+      dialog.querySelector('[role="button"]').addEventListener('click', () => {
+        window.__sendClicks++;
+        window.__sent.push(dialog.querySelector('textarea').value);
+        setTimeout(() => { dialog.innerHTML = '<span>Message sent</span><a href="/messages/t/7/">See conversation</a>'; }, 150);
+      });
+    }, 300);
+  });
+</script>
+</body>
+</html>

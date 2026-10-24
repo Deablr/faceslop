@@ -1,0 +1,66 @@
+# faceslop in Docker.
+#
+#   docker compose up --build -d          # http://127.0.0.1:3000
+#   FACESLOP_PORT=3300 docker compose up --build -d
+#   docker compose logs -f faceslop
+#   docker compose down                   # data (Facebook sessions, favorites, ...) stays in the volume
+#
+# The port is published on the host's loopback (127.0.0.1) only: the container carries Facebook
+# sessions. Variables passed through from your shell (or an .env file next to this one):
+#
+#   APP_PASSWORD          a password for faceslop itself (not Facebook), entered once per browser.
+#                         Required for anything beyond this machine; use a long random value
+#                         (e.g. `openssl rand -base64 24`). Changing it signs every browser out of
+#                         faceslop (not out of Facebook).
+#   FACESLOP_PUBLIC_URL   the https URL people use when a reverse proxy on this host (Caddy, nginx,
+#                         ...) forwards to 127.0.0.1:${FACESLOP_PORT}. Only that host name and
+#                         loopback are answered, cookies are Secure, and the server refuses to
+#                         start without APP_PASSWORD.
+#   FACESLOP_TRUST_PROXY  1 when such a proxy is in front: faceslop then trusts its X-Forwarded-For
+#                         (last hop) and X-Forwarded-Proto headers.
+#
+# The proxy must pass the browser's original Host header (otherwise every POST is refused as
+# cross-origin) and set X-Forwarded-For / X-Forwarded-Proto. Caddy and Traefik do by default;
+# nginx needs:
+#
+#   proxy_set_header Host $host;
+#   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#   proxy_set_header X-Forwarded-Proto $scheme;
+#
+# For LAN use without a proxy, set APP_PASSWORD and change the published address yourself (e.g.
+# "0.0.0.0:3000:3000"); the app password then gates every API call. On Dokploy, don't use this
+# file: create an Application with Build Type "Dockerfile" (README.md, "Deploy on Dokploy").
+services:
+  faceslop:
+    build: .
+    image: faceslop:latest
+    ports:
+      - "127.0.0.1:${FACESLOP_PORT:-3000}:3000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      FACESLOP_DOCKER: "1"
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      FACESLOP_PUBLIC_URL: ${FACESLOP_PUBLIC_URL:-}
+      FACESLOP_TRUST_PROXY: ${FACESLOP_TRUST_PROXY:-}
+    # The SQLite database and fb-sessions/ (one Facebook cookie file per account), mode 0700.
+    volumes:
+      - faceslop-data:/app/.data
+    # Chromium uses /dev/shm for rendering; Docker's 64 MB default is too small.
+    shm_size: 1gb
+    # The image's own init (tini) forwards SIGTERM to Node, which closes Chrome and SQLite, and
+    # reaps Chromium's child processes: no `init: true` needed.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  faceslop-data:

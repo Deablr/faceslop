@@ -1,0 +1,18 @@
+<!doctype html>
+<!-- A listing the user already messaged: no composer, just "Message again" / "See conversation".
+     Test-only hook: window.__clicks counts clicks on any button. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>Marketplace – Lamp | Facebook</title></head>
+<body>
+<div role="main">
+  <h1><span>Brass floor lamp</span></h1>
+  <div><span dir="auto">You messaged this seller</span></div>
+  <div role="button" aria-label="Message again" tabindex="0"><span>Message again</span></div>
+  <a href="/messages/t/42/" role="link"><span>See conversation</span></a>
+</div>
+<script>
+  window.__clicks = 0;
+  document.addEventListener('click', () => window.__clicks++);
+</script>
+</body>
+</html>

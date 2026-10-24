@@ -1,0 +1,20 @@
+# Keep the build context small and free of local state (.data holds the database and Facebook sessions).
+node_modules
+.output
+.nitro
+.tanstack
+.data
+.scratch
+dist
+test
+test-results
+.git
+.gitignore
+.dockerignore
+Dockerfile
+compose.yaml
+*.log
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*

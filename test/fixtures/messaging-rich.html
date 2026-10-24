@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- A listing whose composer is a rich text box (contenteditable, role=textbox) identified only by
+     its aria-label; sending removes the composer. Test-only hooks: window.__sent, window.__sendClicks. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>Marketplace – Road bike | Facebook</title>
+<style>div[role="button"] { display: inline-block; padding: 6px 12px; background: #e4e6eb; cursor: pointer; }
+[contenteditable] { min-height: 40px; width: 300px; border: 1px solid #ccc; }</style></head>
+<body>
+<div role="main">
+  <h1><span>Road bike, 54cm</span></h1>
+  <div data-fixture="composer">
+    <div><div><div contenteditable="true" role="textbox" aria-label="Write a message to the seller" spellcheck="true"><p><br></p></div></div></div>
+    <div><div role="button" tabindex="0" data-fixture="send"><span><span>Send message</span></span></div></div>
+  </div>
+</div>
+<script>
+  window.__sent = [];
+  window.__sendClicks = 0;
+  const box = document.querySelector('[data-fixture="composer"]');
+  box.querySelector('[data-fixture="send"]').addEventListener('click', () => {
+    window.__sendClicks++;
+    window.__sent.push(box.querySelector('[role="textbox"]').innerText.trim());
+    setTimeout(() => box.remove(), 150);
+  });
+</script>
+</body>
+</html>

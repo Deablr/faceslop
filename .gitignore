@@ -1,0 +1,13 @@
+node_modules/
+.output/
+.nitro/
+.tanstack/
+dist/
+.data/
+.scratch/
+*.log
+*.tsbuildinfo
+.DS_Store
+test-results/
+.env
+.env.*

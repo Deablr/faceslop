@@ -1,0 +1,164 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+
+/*
+ * Theme: neutral surfaces, faceslop cyan (#0891b2, assets/icon.svg) as the brand.
+ * Dark mode follows the OS: a tiny head script (src/routes/__root.tsx) toggles `.dark` on <html>
+ * from prefers-color-scheme before first paint. App code uses tokens only (bg-primary,
+ * text-muted-foreground, bg-success/10, ...); raw palette colors are a lint error.
+ */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-success: var(--success);
+    --color-success-foreground: var(--success-foreground);
+    --color-warning: var(--warning);
+    --color-warning-foreground: var(--warning-foreground);
+    --color-brand: var(--brand);
+    --color-brand-foreground: var(--brand-foreground);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    color-scheme: light;
+    /* Surfaces: a soft off-white canvas with white cards. */
+    --background: oklch(0.985 0 0);
+    --foreground: oklch(0.18 0.005 220);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.18 0.005 220);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.18 0.005 220);
+    /* Brand: cyan. Primary is one step darker than the logo cyan for AA contrast on white text. */
+    --brand: oklch(0.609 0.111 221.7);
+    --brand-foreground: oklch(1 0 0);
+    --primary: oklch(0.52 0.094 223.1);
+    --primary-foreground: oklch(0.99 0 0);
+    --secondary: oklch(0.96 0 0);
+    --secondary-foreground: oklch(0.25 0.005 220);
+    --muted: oklch(0.96 0 0);
+    --muted-foreground: oklch(0.52 0.01 220);
+    --accent: oklch(0.956 0.019 213.4);
+    --accent-foreground: oklch(0.45 0.077 224.3);
+    --destructive: oklch(0.577 0.245 27.325);
+    --destructive-foreground: oklch(0.99 0 0);
+    --success: oklch(0.512 0.115 158.3);
+    --success-foreground: oklch(0.99 0 0);
+    --warning: oklch(0.543 0.123 61.8);
+    --warning-foreground: oklch(0.99 0 0);
+    --border: oklch(0.915 0.003 220);
+    --input: oklch(0.89 0.004 220);
+    --ring: oklch(0.609 0.111 221.7);
+    --radius: 0.625rem;
+}
+
+.dark {
+    color-scheme: dark;
+    --background: oklch(0.16 0.004 220);
+    --foreground: oklch(0.94 0.004 220);
+    --card: oklch(0.2 0.005 220);
+    --card-foreground: oklch(0.94 0.004 220);
+    --popover: oklch(0.22 0.005 220);
+    --popover-foreground: oklch(0.94 0.004 220);
+    --brand: oklch(0.715 0.126 215.2);
+    --brand-foreground: oklch(0.16 0.02 220);
+    --primary: oklch(0.723 0.122 215.8);
+    --primary-foreground: oklch(0.16 0.02 220);
+    --secondary: oklch(0.27 0.005 220);
+    --secondary-foreground: oklch(0.94 0.004 220);
+    --muted: oklch(0.27 0.005 220);
+    --muted-foreground: oklch(0.7 0.01 220);
+    --accent: oklch(0.261 0.033 219.2);
+    --accent-foreground: oklch(0.813 0.097 211.5);
+    --destructive: oklch(0.704 0.191 22.216);
+    --destructive-foreground: oklch(0.16 0.02 25);
+    --success: oklch(0.735 0.136 159.3);
+    --success-foreground: oklch(0.16 0.02 160);
+    --warning: oklch(0.808 0.127 75);
+    --warning-foreground: oklch(0.16 0.02 75);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.715 0.126 215.2);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  html {
+    @apply font-sans;
+  }
+  /* Crisp, consistent focus rings on plain links and focusable elements (components draw their own). */
+  a:focus-visible,
+  [tabindex]:focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
+  ::selection {
+    background-color: color-mix(in oklab, var(--brand) 28%, transparent);
+  }
+  /* Calm UX: honor reduced motion everywhere. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Layout helpers that need values outside Tailwind's scale (named here, not as arbitrary values). */
+
+/* Clears the phone's home indicator under the fixed bottom navigation. */
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* The remote viewer's picture never grows taller than the window minus the app chrome around it. */
+@utility max-h-remote {
+  max-height: calc(100dvh - 13rem);
+}
+
+/* The same, inside a dialog (which adds its own header and padding). */
+@utility max-h-remote-dialog {
+  max-height: calc(100dvh - 19rem);
+}
+
+/* A sticky sidebar that scrolls on its own below the top bar. */
+@utility max-h-sticky {
+  max-height: calc(100dvh - 7rem);
+}
