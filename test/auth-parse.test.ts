@@ -166,13 +166,13 @@ describe('classifyLoginStep', () => {
     ).toEqual({ kind: 'save_device' });
   });
 
-  it('gives up on captchas, locked accounts and rate limits, pointing at the login view', () => {
+  it('hands captchas to the view, but fails locked accounts and rate limits', () => {
     const captcha = classifyLoginStep(snap({ url: 'https://www.facebook.com/checkpoint/', hasCaptcha: true }), false);
-    expect(captcha.kind).toBe('failed');
-    expect(captcha.kind === 'failed' && captcha.message).toMatch(/captcha/i);
-    expect(captcha.kind === 'failed' && captcha.message).toContain(USE_LOGIN_VIEW);
+    expect(captcha.kind).toBe('needs_view');
+    expect(captcha.kind === 'needs_view' && captcha.message).toMatch(/security check/i);
+    expect(captcha.kind === 'needs_view' && captcha.message).not.toContain(USE_LOGIN_VIEW);
     const textCaptcha = classifyLoginStep(snap({ url: 'https://www.facebook.com/checkpoint/', text: "Security check\nPlease confirm you're not a robot. I'm not a robot" }), false);
-    expect(textCaptcha.kind).toBe('failed');
+    expect(textCaptcha.kind).toBe('needs_view');
     const locked = classifyLoginStep(snap({ url: 'https://www.facebook.com/checkpoint/828281030927956/', text: 'Your account has been locked\nWe noticed unusual activity.' }), false);
     expect(locked.kind === 'failed' && locked.message).toMatch(/locked/i);
     expect(locked.kind === 'failed' && locked.message).toContain(USE_LOGIN_VIEW);

@@ -275,7 +275,7 @@ export const AuthStatus = Schema.Struct({
   state: AuthState,
   userId: Schema.NullOr(Schema.String),
   userName: Schema.NullOr(Schema.String),
-  /** Human-readable detail for needs_code / needs_approval / error. */
+  /** Human-readable detail for needs_code / needs_approval / window_open / error. */
   message: Schema.NullOr(Schema.String),
 });
 export type AuthStatus = typeof AuthStatus.Type;

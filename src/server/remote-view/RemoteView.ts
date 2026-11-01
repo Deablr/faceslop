@@ -7,14 +7,16 @@
 // - One view PER BROWSER SESSION (ClientSessionId), each with its own Scope, screencast, input
 //   lock and idle timeout. `open` creates it from Browser.interactiveContext(profile) (scoped to a
 //   Scope this service owns) or navigates the session's existing one; a different profile (the
-//   browser logged in or out of Facebook meanwhile) closes it and opens a new one. Open, close
-//   and the rest of a session's lifecycle are serialized per session (keyed-lock.ts), so one
-//   browser's slow page never holds up another's.
+//   browser logged in or out of Facebook meanwhile) closes it and opens a new one. `adoptLogin`
+//   instead takes Auth's existing cookie-less login page and scope, without navigating it. Open,
+//   adopt, close and the rest of a session's lifecycle are serialized per session (keyed-lock.ts),
+//   so one browser's slow page never holds up another's.
 // - At most AppConfig.maxRemoteViews views exist at once across all sessions (each one is a live
 //   Chrome context): opening one more is refused with BAD_REQUEST. A view keeps its slot until its
 //   context has closed; a session replacing its own view reuses its slot.
-// - The Marketplace-only guards (focus-guards.ts) are installed before the first navigation, for
-//   every target; their allowlist includes Facebook's login/2FA/checkpoint pages. 'login' always
+// - The Marketplace-only guards (focus-guards.ts) are installed before a new view's first
+//   navigation, and when an existing login page is adopted; their allowlist includes Facebook's
+//   login/2FA/checkpoint pages. 'login' always
 //   opens with the anonymous profile (no cookies: Auth watches it and saves the new session).
 //   inbox/selling/create need an account profile with a saved session (Browser.hasSession). Do NOT
 //   depend on Auth: Auth depends on RemoteView, and a layer cycle crashes at module load.
@@ -47,7 +49,7 @@ import { sessionTokenFromCookies } from '@/server/auth/auth-parse';
 import { Browser, DEFAULT_INTERACTIVE_VIEWPORT, FB_ORIGIN, type Viewport } from '@/server/browser/Browser';
 import { AppConfig } from '@/server/config';
 import { Marketplace } from '@/server/marketplace/Marketplace';
-import { installFocusGuards, isAllowedFocusedUrl } from '@/server/remote-view/focus-guards';
+import { focusInitScript, installFocusGuards, isAllowedFocusedUrl } from '@/server/remote-view/focus-guards';
 import { makeKeyedLock } from '@/server/remote-view/keyed-lock';
 import { REMOTE_TARGETS, clampPoint, heldModifiers, jpegSize, remoteTargetUrl } from '@/server/remote-view/targets';
 import { ANONYMOUS_PROFILE, type ClientSessionId, type FbProfile, type FbUserId, accountProfile, sameProfile } from '@/server/session/identity';
@@ -63,6 +65,13 @@ import {
   type RemoteViewState,
 } from '@/shared/remote-view';
 
+export interface AdoptedLoginView {
+  readonly context: BrowserContext;
+  readonly page: Page;
+  /** Owns `context`. RemoteView takes ownership whether adoption succeeds or fails. */
+  readonly scope: Scope.Closeable;
+}
+
 export interface RemoteViewShape {
   /**
    * Open (or navigate) this session's view on a target, with `profile`'s cookies (an open view with
@@ -75,6 +84,12 @@ export interface RemoteViewShape {
     profile: FbProfile,
     request: OpenRemoteViewRequest,
   ) => Effect.Effect<RemoteViewState, AppError>;
+  /**
+   * Show an existing cookie-less login page without navigating or recreating it, so its filled
+   * fields survive. Takes ownership of `source.scope` on every outcome; closing the view closes it.
+   * Respects the same per-session lifecycle and global slot limit as `open`.
+   */
+  readonly adoptLogin: (sessionId: ClientSessionId, source: AdoptedLoginView) => Effect.Effect<RemoteViewState, AppError>;
   /** Close this session's view (no-op when closed). An account view saves its cookies back (Browser.interactiveContext). */
   readonly close: (sessionId: ClientSessionId) => Effect.Effect<RemoteViewState>;
   /** Dispatch one input event to this session's page. BAD_REQUEST when it has no view open. */
@@ -470,14 +485,28 @@ const make = Effect.fnUntraced(function* (options: RemoteViewOptions = {}) {
   const pagePump = (view: View, queue: Queue.Queue<PageEvent>) =>
     Effect.forever(Effect.flatMap(Queue.take(queue), (event) => handlePageEvent(view, event)));
 
-  /** Build a view in `scope` (the caller closes the scope if this fails). */
-  const createView = (scope: Scope.Closeable, sessionId: ClientSessionId, profile: FbProfile, target: RemoteTarget) =>
+  /** Build a view in `scope` (the caller closes the scope if this fails), optionally around an existing login page. */
+  const createView = (
+    scope: Scope.Closeable,
+    sessionId: ClientSessionId,
+    profile: FbProfile,
+    target: RemoteTarget,
+    adopted?: AdoptedLoginView,
+  ) =>
     Effect.gen(function* () {
-      const context = yield* browser.interactiveContext(profile).pipe(Scope.provide(scope));
+      if (adopted?.page.isClosed() === true) {
+        return yield* new AppError({ code: 'BAD_REQUEST', message: 'The Facebook login page is not open.' });
+      }
+      const context =
+        adopted === undefined ? yield* browser.interactiveContext(profile).pipe(Scope.provide(scope)) : adopted.context;
       const loadedToken =
         profile.kind === 'account' ? sessionTokenFromCookies(yield* attempt('Could not read the session', () => context.cookies(FB_ORIGIN))) : null;
       yield* attempt('Could not set up the Marketplace-only guards', () => installFocusGuards(context));
-      const page = yield* attempt('Could not open the remote view', () => context.newPage());
+      const page = adopted === undefined ? yield* attempt('Could not open the remote view', () => context.newPage()) : adopted.page;
+      // addInitScript only covers future documents; protect the adopted document without reloading it.
+      if (adopted !== undefined) {
+        yield* attempt('Could not protect the login page', () => page.evaluate(focusInitScript()));
+      }
       const cdp = yield* attempt('Could not stream the remote view', () => context.newCDPSession(page));
       const now = yield* Clock.currentTimeMillis;
       const view: View = {
@@ -550,13 +579,22 @@ const make = Effect.fnUntraced(function* (options: RemoteViewOptions = {}) {
    * holds one (`haveSlot`: the session's previous view was closed keeping it). On failure the slot
    * and the half-built view are released. Must run while holding the session's lock.
    */
-  const addView = (sessionId: ClientSessionId, profile: FbProfile, target: RemoteTarget, haveSlot: boolean) =>
+  const addView = (
+    sessionId: ClientSessionId,
+    profile: FbProfile,
+    target: RemoteTarget,
+    haveSlot: boolean,
+    adopted?: AdoptedLoginView,
+  ) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        if (!haveSlot) yield* reserveSlot;
-        const scope = yield* Scope.make();
-        const view = yield* restore(createView(scope, sessionId, profile, target)).pipe(
-          Effect.onError(() => Effect.andThen(Scope.close(scope, Exit.void), releaseSlot)),
+        const scope = adopted?.scope ?? (yield* Scope.make());
+        // Adoption consumes the supplied scope even when no slot is free.
+        if (!haveSlot) yield* reserveSlot.pipe(Effect.onError(() => Scope.close(scope, Exit.void)));
+        const view = yield* restore(createView(scope, sessionId, profile, target, adopted)).pipe(
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit) ? Effect.void : Effect.andThen(Scope.close(scope, Exit.void), releaseSlot),
+          ),
         );
         views.set(sessionId, view);
         return view;
@@ -606,6 +644,36 @@ const make = Effect.fnUntraced(function* (options: RemoteViewOptions = {}) {
         view.lastActivityAt = yield* Clock.currentTimeMillis;
         return stateOf(view);
       }),
+    );
+  });
+
+  const adoptLogin = Effect.fn('RemoteView.adoptLogin')(function* (sessionId: ClientSessionId, source: AdoptedLoginView) {
+    // If waiting for the session's lock is interrupted, addView never took ownership of the scope.
+    let offeredToAddView = false;
+    return yield* locks.withLock(
+      sessionId,
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const previous = views.get(sessionId);
+          let haveSlot = false;
+          if (previous !== undefined) {
+            yield* closeLocked(previous, { resetMarketplace: true, keepSlot: true });
+            haveSlot = true;
+          }
+          offeredToAddView = true;
+          const view = yield* restore(addView(sessionId, ANONYMOUS_PROFILE, 'login', haveSlot, source));
+          // Once registered, finishing the handoff is atomic: Auth must not lose the watcher to an interruption.
+          // The page is already showing the checkpoint: stream it as-is, without a navigation.
+          yield* restartScreencast(view);
+          yield* refreshTitle(view);
+          view.lastActivityAt = yield* Clock.currentTimeMillis;
+          return stateOf(view);
+        }),
+      ),
+    ).pipe(
+      Effect.onExit((exit) =>
+        Exit.isSuccess(exit) || offeredToAddView ? Effect.void : Scope.close(source.scope, Exit.void),
+      ),
     );
   });
 
@@ -720,7 +788,7 @@ const make = Effect.fnUntraced(function* (options: RemoteViewOptions = {}) {
     }),
   );
 
-  return RemoteView.of({ open, close, input, state, events, page });
+  return RemoteView.of({ open, adoptLogin, close, input, state, events, page });
 });
 
 export class RemoteView extends Context.Service<RemoteView, RemoteViewShape>()('faceslop/server/RemoteView') {
@@ -728,6 +796,7 @@ export class RemoteView extends Context.Service<RemoteView, RemoteViewShape>()('
     RemoteView,
     RemoteView.of({
       open: () => notImplemented('RemoteView.open'),
+      adoptLogin: () => notImplemented('RemoteView.adoptLogin'),
       close: () => notImplemented('RemoteView.close'),
       input: () => notImplemented('RemoteView.input'),
       state: () => notImplemented('RemoteView.state'),

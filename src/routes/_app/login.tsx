@@ -54,7 +54,7 @@ function LoginPage() {
 
   let body: ReactNode;
   if (loginViewOpen) {
-    body = <LoginView />;
+    body = <LoginView message={status?.state === 'window_open' ? status.message : null} />;
   } else if (auth.isPending) {
     body = <Skeleton className="h-56 w-full" />;
   } else if (auth.isError) {
@@ -92,13 +92,14 @@ function LoginPage() {
 }
 
 /** Facebook's own login page, shown live. The view closes itself once the session cookie appears. */
-function LoginView() {
+function LoginView({ message }: { readonly message: string | null }) {
   const view = useRemoteViewState();
   const close = useCloseRemoteView();
   return (
     <div className="flex flex-col gap-4">
       <p role="status" className="mx-auto max-w-lg text-center text-sm text-muted-foreground">
-        Log in on Facebook’s page below, including any security checks. faceslop continues by itself once you’re in.
+        {message ??
+          'Log in on Facebook’s page below, including any security checks. faceslop continues by itself once you’re in.'}
       </p>
       <RemoteViewer
         state={view}
