@@ -77,6 +77,33 @@ describe('reactToAuthStatus', () => {
     expect(state(queryKeys.favorites)?.isInvalidated).toBe(false);
   });
 
+  it('refreshes the remote view when a password attempt hands off to it', async () => {
+    const { queryClient, cached, state, onScreen, callsOf } = setup();
+    cached(queryKeys.auth, LOGGED_OUT);
+    cached(queryKeys.remoteView, { open: false });
+    onScreen(queryKeys.remoteView);
+
+    reactToAuthStatus(queryClient, WINDOW_OPEN);
+
+    expect(state(queryKeys.remoteView)?.isInvalidated).toBe(true);
+    await vi.waitFor(() => {
+      expect(callsOf(queryKeys.remoteView)).toBe(1);
+    });
+  });
+
+  it('retries a failed remote-view refetch while the login view is still open', async () => {
+    const { queryClient, cached, onScreen, callsOf, failed } = setup();
+    cached(queryKeys.auth, WINDOW_OPEN);
+    await failed(queryKeys.remoteView);
+    onScreen(queryKeys.remoteView);
+
+    reactToAuthStatus(queryClient, WINDOW_OPEN);
+
+    await vi.waitFor(() => {
+      expect(callsOf(queryKeys.remoteView)).toBe(1);
+    });
+  });
+
   it('a Facebook login reloads local data as the account, without replaying Facebook work', async () => {
     const { queryClient, cached, state, onScreen, failed, callsOf } = setup();
     cached(queryKeys.appAuth, { required: true, authenticated: true });

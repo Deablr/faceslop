@@ -16,8 +16,8 @@ import { USE_LOGIN_VIEW, sessionTokenFromCookies, userIdFromCookies } from '@/se
 import { Browser, FB_ORIGIN } from '@/server/browser/Browser';
 import { AppConfig } from '@/server/config';
 import { Marketplace } from '@/server/marketplace/Marketplace';
-import { RemoteView } from '@/server/remote-view/RemoteView';
-import { type ClientSession, type ClientSessionId, type FbUserId, accountProfile, profileKey } from '@/server/session/identity';
+import { REMOTE_VIEWS_FULL_MESSAGE, RemoteView } from '@/server/remote-view/RemoteView';
+import { ANONYMOUS_PROFILE, type ClientSession, type ClientSessionId, type FbUserId, accountProfile, profileKey } from '@/server/session/identity';
 import { Sessions } from '@/server/session/Sessions';
 import { notImplemented } from '@/server/stub';
 import type { AuthStatus } from '@/shared/domain';
@@ -34,6 +34,7 @@ const PASSWORD = 'correct horse battery staple';
 const A = 'session-a' as ClientSessionId;
 const B = 'session-b' as ClientSessionId;
 const C = 'session-c' as ClientSessionId;
+const D = 'session-d' as ClientSessionId;
 
 afterAll(() => {
   fs.rmSync(dataDir, { recursive: true, force: true });
@@ -114,6 +115,14 @@ const approvalPage = () =>
     <script>setTimeout(() => { ${setSession(USER_ID)} location.replace('/marketplace/'); }, ${fake.approveAfterMs});</script>`,
   );
 
+const approvalCheckpointPage = () =>
+  html(
+    'Check your notifications',
+    `<h2>Check your notifications on another device</h2>
+    <p>We sent a notification to your iPhone. Approve the login to continue.</p><p>Waiting for approval</p>
+    <script>setTimeout(() => location.replace('/checkpoint/unknown/'), ${fake.approveAfterMs});</script>`,
+  );
+
 function marketplacePage(cookieHeader: string): string {
   const userId = /(?:^|;\s*)c_user=(\d+)/.exec(cookieHeader)?.[1];
   const name = userId === undefined ? undefined : NAMES[userId];
@@ -143,14 +152,19 @@ async function serve(route: Route): Promise<void> {
         return page(goTo('/two_step_verification/two_factor/?encrypted_context=abc'));
       case 'approve@example.com':
         return page(goTo('/two_step_verification/authentication/?encrypted_context=abc'));
+      case 'approval-checkpoint@example.com':
+        return page(goTo('/two_step_verification/approval-checkpoint/'));
       case 'captcha@example.com':
         return page(html('Security check', '<p>Security check</p><iframe title="captcha" src="/captcha/frame" width="300" height="80"></iframe>'));
+      case 'checkpoint@example.com':
+        return page(goTo('/checkpoint/unknown/'));
       case 'other@example.com':
         return page(`<script>${setSession(OTHER_ID)} location.replace('/marketplace/');</script>`);
       default:
         return page(`<script>${setSession(USER_ID)} location.replace('/marketplace/');</script>`);
     }
   }
+  if (url.pathname === '/checkpoint/unknown/') return page(html('Confirm your identity', '<p>Choose a way to confirm your identity</p>'));
   if (url.pathname === '/two_step_verification/two_factor/') return page(codePage());
   if (url.pathname === '/two_step_verification/two_factor/submit/') {
     return form.get('code') === '123456'
@@ -159,6 +173,7 @@ async function serve(route: Route): Promise<void> {
   }
   if (url.pathname === '/two_step_verification/trust/') return page(trustPage);
   if (url.pathname === '/two_step_verification/authentication/') return page(approvalPage());
+  if (url.pathname === '/two_step_verification/approval-checkpoint/') return page(approvalCheckpointPage());
   if (url.pathname.startsWith('/marketplace')) {
     const hook = fake.onMarketplace;
     fake.onMarketplace = null;
@@ -278,11 +293,12 @@ const login = (id: ClientSessionId, email: string, password = PASSWORD) =>
 const submitCode = (id: ClientSessionId, code: string) =>
   Effect.flatMap(sessionOf(id), (session) => Auth.use((auth) => auth.submitLoginCode(session, code)));
 const openLoginView = (id: ClientSessionId) => Effect.flatMap(sessionOf(id), (session) => Auth.use((auth) => auth.openLoginView(session)));
+const cancelLogin = (id: ClientSessionId) => Effect.flatMap(sessionOf(id), (session) => Auth.use((auth) => auth.cancelLogin(session)));
 const logout = (id: ClientSessionId) => Effect.flatMap(sessionOf(id), (session) => Auth.use((auth) => auth.logout(session)));
 
 /** Each test starts with every session logged out, no login in progress, no view open, no session files. */
 const reset = Effect.gen(function* () {
-  for (const id of [A, B, C]) assert.deepStrictEqual(yield* logout(id), loggedOut);
+  for (const id of [A, B, C, D]) assert.deepStrictEqual(yield* logout(id), loggedOut);
   const browser = yield* Browser;
   yield* browser.clearSession(USER_ID);
   yield* browser.clearSession(OTHER_ID);
@@ -429,14 +445,81 @@ describe.skipIf(skip)('Auth (headless Chrome, fake facebook.com)', () => {
     );
 
     it.effect(
-      "points at Facebook's own login page for captchas",
+      'hands off an unknown checkpoint that appears while waiting for approval',
       () =>
         Effect.gen(function* () {
           yield* reset;
+          assert.strictEqual((yield* login(A, 'approval-checkpoint@example.com')).state, 'needs_approval');
+          const status = yield* pollStatus(A, (current) => current.state !== 'needs_approval', 30_000);
+          assert.strictEqual(status.state, 'window_open');
+          assert.strictEqual(new URL((yield* viewPage(A)).url()).pathname, '/checkpoint/unknown/');
+          assert.deepStrictEqual(yield* cancelLogin(A), loggedOut);
+        }),
+      60_000,
+    );
+
+    it.effect(
+      'hands a captcha to the live view on the same page and finishes after it is solved',
+      () =>
+        Effect.gen(function* () {
+          yield* reset;
+          const view = yield* RemoteView;
           const status = yield* login(A, 'captcha@example.com');
-          assert.strictEqual(status.state, 'error');
-          assert.match(status.message ?? '', /captcha/i);
-          assert.include(status.message ?? '', USE_LOGIN_VIEW);
+          assert.strictEqual(status.state, 'window_open');
+          assert.match(status.message ?? '', /security check/i);
+          assert.notInclude(status.message ?? '', USE_LOGIN_VIEW);
+          assert.deepInclude(yield* view.state(A), { open: true, target: 'login' });
+          assert.isFalse((yield* view.state(B)).open, "another browser's view is untouched");
+          const page = yield* viewPage(A);
+          assert.strictEqual(new URL(page.url()).pathname, '/login/device-based/regular/login/', 'not navigated back to a fresh login form');
+          assert.strictEqual(yield* Effect.promise(() => page.title()), 'Security check');
+          assert.deepStrictEqual(yield* statusOf(A), status, 'the security-check note survives status polling');
+
+          yield* logInInView(page);
+          assert.deepStrictEqual(yield* pollStatus(A, (current) => current.state !== 'window_open'), loggedIn);
+          assert.isTrue(fs.existsSync(sessionFile(USER_ID)));
+          assert.strictEqual(yield* boundTo(A), USER_ID);
+          assert.isTrue(page.isClosed());
+          assert.isFalse((yield* view.state(A)).open);
+        }),
+      60_000,
+    );
+
+    it.effect(
+      'hands an unknown checkpoint to the view and cancelling closes its context',
+      () =>
+        Effect.gen(function* () {
+          yield* reset;
+          const view = yield* RemoteView;
+          const status = yield* login(A, 'checkpoint@example.com');
+          assert.strictEqual(status.state, 'window_open');
+          const page = yield* viewPage(A);
+          assert.strictEqual(new URL(page.url()).pathname, '/checkpoint/unknown/');
+
+          assert.deepStrictEqual(yield* cancelLogin(A), loggedOut);
+          assert.isTrue(page.isClosed());
+          assert.isFalse((yield* view.state(A)).open);
+          assert.isFalse(fs.existsSync(sessionFile(USER_ID)));
+          // The released slot can be used immediately.
+          assert.strictEqual((yield* openLoginView(A)).state, 'window_open');
+        }),
+      60_000,
+    );
+
+    it.effect(
+      'a captcha handoff respects the remote-view slot limit',
+      () =>
+        Effect.gen(function* () {
+          yield* reset;
+          const view = yield* RemoteView;
+          for (const id of [A, B, C]) yield* view.open(id, ANONYMOUS_PROFILE, { target: 'login' });
+          const error = yield* failureOf(login(D, 'captcha@example.com'));
+          assert.strictEqual(error.code, 'BAD_REQUEST');
+          assert.strictEqual(error.message, REMOTE_VIEWS_FULL_MESSAGE);
+          assert.isFalse((yield* view.state(D)).open);
+
+          yield* view.close(C);
+          assert.strictEqual((yield* login(D, 'captcha@example.com')).state, 'window_open');
         }),
       60_000,
     );

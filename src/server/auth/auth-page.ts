@@ -268,14 +268,14 @@ export async function readLoginStep(page: Page): Promise<{ readonly step: LoginS
   return { step: classifyLoginStep(snapshot, hasSession), signature: snapshotSignature(snapshot) };
 }
 
-export type LoginOutcome = Extract<LoginStep, { readonly kind: 'success' | 'needs_code' | 'needs_approval' | 'failed' }>;
+export type LoginOutcome = Extract<LoginStep, { readonly kind: 'success' | 'needs_code' | 'needs_approval' | 'needs_view' | 'failed' }>;
 
 export interface OutcomeOptions {
   readonly timeoutMs?: number;
   /** Signature of the page before submitting; a prompt on an unchanged page is ignored for `staleMs`. */
   readonly before?: string | null;
   readonly staleMs?: number;
-  /** How long an unrecognized checkpoint must persist before giving up. */
+  /** How long an unrecognized checkpoint must persist before handing it to the user. */
   readonly settleMs?: number;
   readonly pollMs?: number;
 }
@@ -299,6 +299,7 @@ export async function waitForLoginOutcome(page: Page, options: OutcomeOptions = 
     switch (step.kind) {
       case 'success':
       case 'failed':
+      case 'needs_view':
         return step;
       case 'needs_code':
       case 'needs_approval':
@@ -319,7 +320,7 @@ export async function waitForLoginOutcome(page: Page, options: OutcomeOptions = 
         break;
       case 'unknown_checkpoint':
         if (unknownSince === 0) unknownSince = Date.now();
-        if (Date.now() - unknownSince >= settleMs) return { kind: 'failed', message: step.message };
+        if (Date.now() - unknownSince >= settleMs) return { kind: 'needs_view', message: step.message };
         break;
       case 'pending':
         break;

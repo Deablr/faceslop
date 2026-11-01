@@ -102,6 +102,12 @@ export function onUnlocked(queryClient: QueryClient): void {
  */
 export function reactToAuthStatus(queryClient: QueryClient, status: AuthStatus): void {
   const before = queryClient.getQueryData<AuthStatus>(queryKeys.auth);
+  // A password attempt can hand its page to the live view; its cached state otherwise stays closed.
+  // If that refetch failed, let a later status poll retry it instead of leaving the waiting card stuck.
+  const remoteView = queryClient.getQueryState(queryKeys.remoteView);
+  if (status.state === 'window_open' && (before?.state !== 'window_open' || remoteView?.status === 'error')) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.remoteView });
+  }
   // The first status (e.g. during SSR) has nothing to compare with.
   if (before === undefined) return;
   if (accountOf(before) !== accountOf(status)) onDataOwnerChanged(queryClient);

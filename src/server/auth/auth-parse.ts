@@ -108,19 +108,21 @@ export type LoginStep =
   | { readonly kind: 'success' }
   | { readonly kind: 'needs_code'; readonly message: string }
   | { readonly kind: 'needs_approval'; readonly message: string }
+  /** A captcha or other checkpoint that needs the user, on this same page. */
+  | { readonly kind: 'needs_view'; readonly message: string }
   /** "Save browser / Trust this device?": answer it and keep going. */
   | { readonly kind: 'save_device' }
   | { readonly kind: 'cookie_consent' }
-  /** Definitive failure: wrong credentials, captcha, locked account, rate limit. */
+  /** Definitive failure: wrong credentials, locked account, rate limit. */
   | { readonly kind: 'failed'; readonly message: string }
-  /** An auth page we don't understand. Only treat as failure once the page has settled. */
+  /** An auth page we don't understand. Hand it to the user once the page has settled. */
   | { readonly kind: 'unknown_checkpoint'; readonly message: string }
   /** Still loading / still on the form with nothing to report. */
   | { readonly kind: 'pending' };
 
 /**
- * Appended to failures the hidden login can't get past (captcha, unknown checkpoints, rate
- * limits): the remote login view (openRemoteView { target: 'login' }) shows Facebook's own page.
+ * Appended to failures the hidden login can't get past (locked accounts, rate limits): a fresh
+ * remote login view (openRemoteView { target: 'login' }) shows Facebook's own page.
  */
 export const USE_LOGIN_VIEW = "Log in through Facebook's own login page instead.";
 
@@ -150,7 +152,10 @@ function sentenceMatching(text: string, re: RegExp): string | null {
 export function classifyLoginStep(s: LoginSnapshot, hasSession: boolean): LoginStep {
   if (hasSession && !isAuthUrl(s.url)) return { kind: 'success' };
   if (s.hasCaptcha || (!s.hasCodeField && CAPTCHA_TEXT.test(s.text))) {
-    return { kind: 'failed', message: `Facebook wants a security check (captcha). ${USE_LOGIN_VIEW}` };
+    return {
+      kind: 'needs_view',
+      message: 'Facebook wants you to solve a security check. Your email and password are already filled in.',
+    };
   }
   if (LOCKED_TEXT.test(s.text)) {
     const detail = sentenceMatching(s.text, LOCKED_TEXT) ?? 'Facebook says your account is locked.';
@@ -175,7 +180,10 @@ export function classifyLoginStep(s: LoginSnapshot, hasSession: boolean): LoginS
     return { kind: 'pending' };
   }
   if (isAuthUrl(s.url)) {
-    return { kind: 'unknown_checkpoint', message: `Facebook is asking for an extra check this app can't answer. ${USE_LOGIN_VIEW}` };
+    return {
+      kind: 'unknown_checkpoint',
+      message: 'Facebook wants you to finish an extra security check. Your email and password are already filled in.',
+    };
   }
   return { kind: 'pending' };
 }

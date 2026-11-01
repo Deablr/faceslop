@@ -23,11 +23,13 @@ const codeLines = (text: string) =>
     .map((line) => line.trim())
     .filter((line) => line !== '' && !line.startsWith('#'));
 
-describe('compose.yaml', () => {
+describe('compose files', () => {
   const compose = read('compose.yaml');
+  const override = read('compose.override.yaml');
 
-  it('publishes ports on the host loopback only', () => {
-    const ports = [...compose.matchAll(/^\s*-\s*"?([^"\n]+:\d+)"?\s*$/gm)]
+  it('publishes no port in the base file, and local ports on the host loopback only', () => {
+    expect(compose).not.toMatch(/^\s*ports:/m);
+    const ports = [...override.matchAll(/^\s*-\s*"?([^"\n]+:\d+)"?\s*$/gm)]
       .map((match) => match[1] ?? '')
       .filter((entry) => /:\d+$/.test(entry) && !entry.includes('/'));
     expect(ports.length).toBeGreaterThan(0);

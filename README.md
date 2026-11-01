@@ -90,7 +90,9 @@ two-factor or checkpoint steps. Once Facebook lets you in, the view closes by it
 session cookies are saved to `.data/fb-sessions/<your Facebook user id>.json` (mode 0600). Your
 password is never logged, stored, or sent anywhere but Facebook. There is also a plain
 email-and-password form: faceslop types your details into Facebook's login page and asks for a code
-if Facebook wants one. The few Marketplace pages faceslop doesn't rebuild (inbox, your listings,
+if Facebook wants one. If Facebook asks for a captcha or another security check, that same page,
+with your details still filled in, opens in the live view so you only need to finish the check.
+The few Marketplace pages faceslop doesn't rebuild (inbox, your listings,
 creating a listing) open the same way, limited to Marketplace. Each browser gets its own remote
 view; at most `FACESLOP_MAX_REMOTE_VIEWS` (3) are open at once.
 

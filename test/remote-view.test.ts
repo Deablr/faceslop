@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { assert, describe, layer } from '@effect/vitest';
-import { Effect, Fiber, Layer, Option, Stream } from 'effect';
+import { Effect, Fiber, Layer, Option, Scope, Stream } from 'effect';
 import type { BrowserContext, Page, Route } from 'playwright';
 import { expect } from 'vitest';
 import { Browser, FB_ORIGIN } from '@/server/browser/Browser';
@@ -377,6 +377,44 @@ describe.skipIf(skip)('RemoteView (headless Chrome, fake facebook.com)', () => {
     );
 
     it.effect(
+      'adopts a login page without recreating or navigating it, and owns its scope',
+      () =>
+        Effect.gen(function* () {
+          const view = yield* RemoteView;
+          const browser = yield* Browser;
+          const scope = yield* Scope.make();
+          const context = yield* browser.interactiveContext(ANONYMOUS_PROFILE).pipe(Scope.provide(scope));
+          const page = yield* Effect.promise(() => context.newPage());
+          yield* Effect.promise(async () => {
+            await page.goto(`${FB_ORIGIN}/login/`);
+            await page.setContent(html('Security check', '<form><input id="email"><input id="password" type="password"></form>'));
+            await page.locator('#email').fill('person@example.com');
+            await page.locator('#password').fill('already filled');
+          });
+          marketplaceCalls.length = 0;
+
+          const state = yield* view.adoptLogin(SESSION_A, { context, page, scope });
+          assert.deepInclude(state, { open: true, target: 'login', url: `${FB_ORIGIN}/login/` });
+          assert.strictEqual(yield* openPage(view), page);
+          assert.strictEqual(yield* Effect.promise(() => page.locator('#email').inputValue()), 'person@example.com');
+          assert.strictEqual(yield* Effect.promise(() => page.locator('#password').inputValue()), 'already filled');
+          yield* nextEvent(view, isFrame);
+          // The current document gets the SPA guards too, not just documents loaded after adoption.
+          yield* Effect.promise(() =>
+            page.evaluate(() => {
+              history.pushState({}, '', '/watch');
+            }),
+          );
+          yield* poll(() => page.url(), FOCUS_HOME);
+
+          yield* view.close(SESSION_A);
+          assert.isTrue(page.isClosed());
+          assert.deepStrictEqual(marketplaceCalls, [], 'an adopted login view is still anonymous');
+        }),
+      60_000,
+    );
+
+    it.effect(
       "closing an account view saves its cookies to that account and resets only that account's Marketplace state",
       () =>
         Effect.gen(function* () {
@@ -585,6 +623,16 @@ describe.skipIf(skip)('RemoteView (headless Chrome, fake facebook.com)', () => {
           assert.strictEqual(error.code, 'BAD_REQUEST');
           assert.strictEqual(error.message, REMOTE_VIEWS_FULL_MESSAGE);
           assert.isFalse((yield* view.state(SESSION_C)).open);
+
+          // Adoption consumes and closes the offered login context even when no slot is free.
+          const browser = yield* Browser;
+          const scope = yield* Scope.make();
+          const context = yield* browser.interactiveContext(ANONYMOUS_PROFILE).pipe(Scope.provide(scope));
+          const adoptedPage = yield* Effect.promise(() => context.newPage());
+          const adoptionError = yield* Effect.flip(view.adoptLogin(SESSION_C, { context, page: adoptedPage, scope }));
+          assert.strictEqual(adoptionError.code, 'BAD_REQUEST');
+          assert.strictEqual(adoptionError.message, REMOTE_VIEWS_FULL_MESSAGE);
+          assert.isTrue(adoptedPage.isClosed());
 
           // Navigating (or switching the profile of) an open view needs no new slot.
           yield* view.open(SESSION_A, ANONYMOUS_PROFILE, { target: 'login' });

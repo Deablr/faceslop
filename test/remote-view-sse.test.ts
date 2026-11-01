@@ -22,6 +22,7 @@ function fakeRemoteView(events: readonly RemoteStreamEvent[]) {
     RemoteView,
     RemoteView.of({
       open: () => Effect.succeed(CLOSED_REMOTE_VIEW_STATE),
+      adoptLogin: () => Effect.succeed(CLOSED_REMOTE_VIEW_STATE),
       close: () => Effect.succeed(CLOSED_REMOTE_VIEW_STATE),
       input: () => Effect.void,
       state: () => Effect.succeed(CLOSED_REMOTE_VIEW_STATE),
