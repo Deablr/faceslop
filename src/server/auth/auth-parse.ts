@@ -111,16 +111,18 @@ export type LoginStep =
   /** "Save browser / Trust this device?": answer it and keep going. */
   | { readonly kind: 'save_device' }
   | { readonly kind: 'cookie_consent' }
-  /** Definitive failure: wrong credentials, captcha, locked account, rate limit. */
+  /** Definitive failure: wrong credentials, locked account, rate limit. */
   | { readonly kind: 'failed'; readonly message: string }
+  /** Something only the user can answer (a captcha): show this page in the remote view. */
+  | { readonly kind: 'needs_view'; readonly message: string }
   /** An auth page we don't understand. Only treat as failure once the page has settled. */
   | { readonly kind: 'unknown_checkpoint'; readonly message: string }
   /** Still loading / still on the form with nothing to report. */
   | { readonly kind: 'pending' };
 
 /**
- * Appended to failures the hidden login can't get past (captcha, unknown checkpoints, rate
- * limits): the remote login view (openRemoteView { target: 'login' }) shows Facebook's own page.
+ * Appended to failures the hidden login can't get past (locked accounts, rate limits, broken
+ * pages): the remote login view (openRemoteView { target: 'login' }) shows Facebook's own page.
  */
 export const USE_LOGIN_VIEW = "Log in through Facebook's own login page instead.";
 
@@ -134,6 +136,10 @@ const SAVE_DEVICE_TEXT = /save (this )?browser|trust this device|remember (this 
 const SAVE_DEVICE_BUTTON = /^(trust this device|save browser|remember browser|save|ok|continue)$/i;
 const APPROVAL_TEXT =
   /check your notifications|approve (the |this |your )?log ?in|approve from|waiting for approval|on another device|go to your facebook app|we sent a notification/i;
+
+/** Shown with the remote view when a password login hands its page over (captcha, unknown checkpoint). */
+export const SECURITY_CHECK_MESSAGE =
+  "Facebook wants you to solve a security check. Finish it on Facebook's page below; faceslop continues by itself once you're in.";
 
 const DEFAULT_CODE_MESSAGE = 'Facebook sent you a login code. Enter it to finish logging in.';
 const APPROVAL_MESSAGE =
@@ -150,7 +156,7 @@ function sentenceMatching(text: string, re: RegExp): string | null {
 export function classifyLoginStep(s: LoginSnapshot, hasSession: boolean): LoginStep {
   if (hasSession && !isAuthUrl(s.url)) return { kind: 'success' };
   if (s.hasCaptcha || (!s.hasCodeField && CAPTCHA_TEXT.test(s.text))) {
-    return { kind: 'failed', message: `Facebook wants a security check (captcha). ${USE_LOGIN_VIEW}` };
+    return { kind: 'needs_view', message: SECURITY_CHECK_MESSAGE };
   }
   if (LOCKED_TEXT.test(s.text)) {
     const detail = sentenceMatching(s.text, LOCKED_TEXT) ?? 'Facebook says your account is locked.';

@@ -17,7 +17,9 @@
 //   built only from FbUserIds (digits). When the layer is built, temp files of writes a crash
 //   interrupted are removed, and the single-user file from before multi-user support
 //   (`<dataDir>/fb-session.json`) is migrated once: it becomes its c_user's file, then it is removed.
-// - `loginContext`: a fresh cookie-less context for password logins (saved explicitly).
+// - `loginContext`: a fresh cookie-less context for password logins (saved explicitly). Shaped like
+//   an interactive one (no resource blocking, the remote view's viewport): a login that hits a
+//   captcha is handed to the remote view as is.
 // - `interactiveContext` for the remote view: no resource blocking, carries the profile's saved
 //   cookies; when its scope closes, an account context still logged in to THAT account saves its
 //   cookies back to the account's file. Anything else is discarded, so one account's cookies can
@@ -89,9 +91,10 @@ export interface BrowserShape {
   /** Forget an account's Facebook session (logout): delete its session file and reset its hidden context. */
   readonly clearSession: (userId: FbUserId) => Effect.Effect<void, AppError>;
   /**
-   * A fresh hidden-style context with NO cookies, for driving facebook.com/login (password login).
-   * Nothing is saved automatically: on success the caller saves it with `saveSession`. Closed
-   * with the scope.
+   * A fresh context with NO cookies, for driving facebook.com/login (password login). Like an
+   * interactive context (no resource blocking, DEFAULT_INTERACTIVE_VIEWPORT), so Auth can hand it
+   * to the remote view when Facebook shows a captcha. Nothing is saved automatically: on success
+   * the caller saves it with `saveSession`. Closed with the scope.
    */
   readonly loginContext: Effect.Effect<BrowserContext, AppError, Scope.Scope>;
   /**
@@ -533,7 +536,10 @@ const make = Effect.fnUntraced(function* (options: BrowserOptions = {}) {
     );
   });
 
-  const loginContext = Effect.acquireRelease(lifecycle.withPermits(1)(newHiddenContext(undefined)), closeContext);
+  const loginContext = Effect.acquireRelease(
+    lifecycle.withPermits(1)(Effect.flatMap(ensureBrowser, (target) => newContext(target, DEFAULT_INTERACTIVE_VIEWPORT, undefined))),
+    closeContext,
+  );
 
   const interactiveContext = (profile: FbProfile, viewOptions?: { readonly viewport?: Viewport }) =>
     Effect.acquireRelease(

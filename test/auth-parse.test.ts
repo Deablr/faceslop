@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   type LoginSnapshot,
+  SECURITY_CHECK_MESSAGE,
   USE_LOGIN_VIEW,
   classifyLoginStep,
   classifySessionPage,
@@ -166,13 +167,11 @@ describe('classifyLoginStep', () => {
     ).toEqual({ kind: 'save_device' });
   });
 
-  it('gives up on captchas, locked accounts and rate limits, pointing at the login view', () => {
+  it('hands captchas to the user, and gives up on locked accounts and rate limits, pointing at the login view', () => {
     const captcha = classifyLoginStep(snap({ url: 'https://www.facebook.com/checkpoint/', hasCaptcha: true }), false);
-    expect(captcha.kind).toBe('failed');
-    expect(captcha.kind === 'failed' && captcha.message).toMatch(/captcha/i);
-    expect(captcha.kind === 'failed' && captcha.message).toContain(USE_LOGIN_VIEW);
+    expect(captcha).toEqual({ kind: 'needs_view', message: SECURITY_CHECK_MESSAGE });
     const textCaptcha = classifyLoginStep(snap({ url: 'https://www.facebook.com/checkpoint/', text: "Security check\nPlease confirm you're not a robot. I'm not a robot" }), false);
-    expect(textCaptcha.kind).toBe('failed');
+    expect(textCaptcha.kind).toBe('needs_view');
     const locked = classifyLoginStep(snap({ url: 'https://www.facebook.com/checkpoint/828281030927956/', text: 'Your account has been locked\nWe noticed unusual activity.' }), false);
     expect(locked.kind === 'failed' && locked.message).toMatch(/locked/i);
     expect(locked.kind === 'failed' && locked.message).toContain(USE_LOGIN_VIEW);

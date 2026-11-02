@@ -104,6 +104,8 @@ export function reactToAuthStatus(queryClient: QueryClient, status: AuthStatus):
   const before = queryClient.getQueryData<AuthStatus>(queryKeys.auth);
   // The first status (e.g. during SSR) has nothing to compare with.
   if (before === undefined) return;
+  // A login view opened on the server (a password login handed its captcha to it): show it.
+  if (status.state === 'window_open' && before.state !== 'window_open') void queryClient.invalidateQueries({ queryKey: queryKeys.remoteView });
   if (accountOf(before) !== accountOf(status)) onDataOwnerChanged(queryClient);
   else if (before.state !== status.state) onSessionChanged(queryClient);
 }
