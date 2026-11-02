@@ -12,11 +12,11 @@ import { Effect, Layer, Option, Ref } from 'effect';
 import type { BrowserContext, Page, Route } from 'playwright';
 import { afterAll, vi } from 'vitest';
 import { Auth, MAX_PASSWORD_LOGINS } from '@/server/auth/Auth';
-import { USE_LOGIN_VIEW, sessionTokenFromCookies, userIdFromCookies } from '@/server/auth/auth-parse';
+import { SECURITY_CHECK_MESSAGE, sessionTokenFromCookies, userIdFromCookies } from '@/server/auth/auth-parse';
 import { Browser, FB_ORIGIN } from '@/server/browser/Browser';
 import { AppConfig } from '@/server/config';
 import { Marketplace } from '@/server/marketplace/Marketplace';
-import { RemoteView } from '@/server/remote-view/RemoteView';
+import { REMOTE_VIEWS_FULL_MESSAGE, RemoteView } from '@/server/remote-view/RemoteView';
 import { type ClientSession, type ClientSessionId, type FbUserId, accountProfile, profileKey } from '@/server/session/identity';
 import { Sessions } from '@/server/session/Sessions';
 import { notImplemented } from '@/server/stub';
@@ -34,6 +34,7 @@ const PASSWORD = 'correct horse battery staple';
 const A = 'session-a' as ClientSessionId;
 const B = 'session-b' as ClientSessionId;
 const C = 'session-c' as ClientSessionId;
+const D = 'session-d' as ClientSessionId;
 
 afterAll(() => {
   fs.rmSync(dataDir, { recursive: true, force: true });
@@ -78,10 +79,20 @@ function loginPage(alert = ''): string {
       ${alert === '' ? '' : `<div role="alert">${alert}</div>`}
       <div><input id="_R_c9l6ne_" type="text" name="email" autocomplete="username webauthn"><label for="_R_c9l6ne_">Email or mobile number</label></div>
       <div><input id="_R_cdl6ne_" type="password" name="pass"><label for="_R_cdl6ne_">Password</label></div>
-      <div aria-label="Log In" role="button" tabindex="0" onclick="this.closest('form').submit()"><span>Log in</span></div>
+      <div aria-label="Log In" role="button" tabindex="0" onclick="logIn(this.closest('form'))"><span>Log in</span></div>
       <input type="submit" style="width:0;height:0;padding:0;border:0">
       <a href="/recover/initiate/">Forgot password?</a>
-    </form>`,
+    </form>
+    <script>
+      // captcha@example.com gets a captcha on this page, over the filled-in form, until it is solved.
+      function logIn(form) {
+        if (form.email.value === 'captcha@example.com' && !window.captchaSolved) {
+          if (!document.getElementById('captcha')) form.insertAdjacentHTML('beforeend', '<iframe id="captcha" title="captcha" src="/captcha/frame" width="300" height="80"></iframe>');
+          return;
+        }
+        form.submit();
+      }
+    </script>`,
   );
 }
 
@@ -143,8 +154,6 @@ async function serve(route: Route): Promise<void> {
         return page(goTo('/two_step_verification/two_factor/?encrypted_context=abc'));
       case 'approve@example.com':
         return page(goTo('/two_step_verification/authentication/?encrypted_context=abc'));
-      case 'captcha@example.com':
-        return page(html('Security check', '<p>Security check</p><iframe title="captcha" src="/captcha/frame" width="300" height="80"></iframe>'));
       case 'other@example.com':
         return page(`<script>${setSession(OTHER_ID)} location.replace('/marketplace/');</script>`);
       default:
@@ -282,7 +291,7 @@ const logout = (id: ClientSessionId) => Effect.flatMap(sessionOf(id), (session) 
 
 /** Each test starts with every session logged out, no login in progress, no view open, no session files. */
 const reset = Effect.gen(function* () {
-  for (const id of [A, B, C]) assert.deepStrictEqual(yield* logout(id), loggedOut);
+  for (const id of [A, B, C, D]) assert.deepStrictEqual(yield* logout(id), loggedOut);
   const browser = yield* Browser;
   yield* browser.clearSession(USER_ID);
   yield* browser.clearSession(OTHER_ID);
@@ -429,14 +438,82 @@ describe.skipIf(skip)('Auth (headless Chrome, fake facebook.com)', () => {
     );
 
     it.effect(
-      "points at Facebook's own login page for captchas",
+      'hands a captcha to the login view, form still filled in, and finishes once it is solved',
       () =>
         Effect.gen(function* () {
           yield* reset;
+          const view = yield* RemoteView;
           const status = yield* login(A, 'captcha@example.com');
-          assert.strictEqual(status.state, 'error');
-          assert.match(status.message ?? '', /captcha/i);
-          assert.include(status.message ?? '', USE_LOGIN_VIEW);
+          assert.deepStrictEqual(status, { state: 'window_open', userId: null, userName: null, message: SECURITY_CHECK_MESSAGE });
+          assert.deepStrictEqual(yield* statusOf(A), status);
+          assert.deepInclude(yield* view.state(A), { open: true, target: 'login' });
+          assert.isFalse((yield* view.state(B)).open, "another browser's view is untouched");
+          // The attempt's own page: nothing needs typing again.
+          const page = yield* viewPage(A);
+          assert.strictEqual(new URL(page.url()).pathname, '/login/');
+          assert.strictEqual(yield* Effect.promise(() => page.inputValue('input[name="email"]')), 'captcha@example.com');
+          assert.isTrue((yield* Effect.promise(() => page.inputValue('input[name="pass"]'))) !== '', 'the password is still filled in');
+          // It no longer counts as a password login: two others can start.
+          fake.approveAfterMs = 120_000;
+          assert.strictEqual((yield* login(B, 'code@example.com')).state, 'needs_code');
+          assert.strictEqual((yield* login(C, 'approve@example.com')).state, 'needs_approval');
+
+          // The user solves the captcha and logs in.
+          yield* Effect.promise(() =>
+            page.evaluate(() => {
+              Object.assign(window, { captchaSolved: true });
+              document.getElementById('captcha')?.remove();
+              document.querySelector<HTMLElement>('[aria-label="Log In"]')?.click();
+            }),
+          );
+          assert.deepStrictEqual(yield* pollStatus(A, (current) => current.state !== 'window_open'), loggedIn);
+          assert.isFalse((yield* view.state(A)).open, 'closed by itself');
+          assert.isTrue(page.isClosed(), 'the login context is gone');
+          assert.isTrue(fs.existsSync(sessionFile(USER_ID)));
+          assert.strictEqual(yield* boundTo(A), USER_ID);
+          assert.includeMembers(marketplaceCalls, resetOf(USER_ID));
+        }),
+      60_000,
+    );
+
+    it.effect(
+      'cancelling a captcha handed to the login view closes the login context',
+      () =>
+        Effect.gen(function* () {
+          yield* reset;
+          const view = yield* RemoteView;
+          assert.strictEqual((yield* login(A, 'captcha@example.com')).state, 'window_open');
+          const page = yield* viewPage(A);
+          const auth = yield* Auth;
+          assert.deepStrictEqual(yield* auth.cancelLogin(yield* sessionOf(A)), loggedOut);
+          assert.isFalse((yield* view.state(A)).open);
+          assert.isTrue(page.isClosed());
+
+          // Closing the view itself does the same.
+          assert.strictEqual((yield* login(A, 'captcha@example.com')).state, 'window_open');
+          const again = yield* viewPage(A);
+          yield* view.close(A);
+          assert.isTrue(again.isClosed());
+          assert.deepStrictEqual(yield* statusOf(A), loggedOut);
+          assert.isFalse(fs.existsSync(sessionFile(USER_ID)));
+          assert.isNull(yield* boundTo(A));
+        }),
+      60_000,
+    );
+
+    it.effect(
+      'a captcha with every view slot taken says so and closes the login context',
+      () =>
+        Effect.gen(function* () {
+          yield* reset;
+          const view = yield* RemoteView;
+          for (const id of [B, C, D]) assert.strictEqual((yield* openLoginView(id)).state, 'window_open');
+          const status = yield* login(A, 'captcha@example.com');
+          assert.deepStrictEqual(status, { state: 'error', userId: null, userName: null, message: REMOTE_VIEWS_FULL_MESSAGE });
+          assert.isFalse((yield* view.state(A)).open);
+          // Its password-login slot is free again.
+          yield* view.close(D);
+          assert.deepStrictEqual(yield* login(A, 'plain@example.com'), loggedIn);
         }),
       60_000,
     );

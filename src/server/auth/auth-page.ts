@@ -10,6 +10,7 @@ import type { Locator, Page } from 'playwright';
 import {
   type LoginSnapshot,
   type LoginStep,
+  SECURITY_CHECK_MESSAGE,
   USE_LOGIN_VIEW,
   classifyLoginStep,
   isAuthUrl,
@@ -268,21 +269,25 @@ export async function readLoginStep(page: Page): Promise<{ readonly step: LoginS
   return { step: classifyLoginStep(snapshot, hasSession), signature: snapshotSignature(snapshot) };
 }
 
-export type LoginOutcome = Extract<LoginStep, { readonly kind: 'success' | 'needs_code' | 'needs_approval' | 'failed' }>;
+export type LoginOutcome = Extract<
+  LoginStep,
+  { readonly kind: 'success' | 'needs_code' | 'needs_approval' | 'needs_view' | 'failed' }
+>;
 
 export interface OutcomeOptions {
   readonly timeoutMs?: number;
   /** Signature of the page before submitting; a prompt on an unchanged page is ignored for `staleMs`. */
   readonly before?: string | null;
   readonly staleMs?: number;
-  /** How long an unrecognized checkpoint must persist before giving up. */
+  /** How long an unrecognized checkpoint must persist before handing it to the user (`needs_view`). */
   readonly settleMs?: number;
   readonly pollMs?: number;
 }
 
 /**
  * After submitting the form or a code: wait until Facebook logs us in, asks for something, or
- * fails. Answers cookie and "trust this device" prompts along the way.
+ * fails. Answers cookie and "trust this device" prompts along the way. A captcha, or a checkpoint
+ * this code doesn't recognize, is `needs_view`: the user finishes it on this very page.
  */
 export async function waitForLoginOutcome(page: Page, options: OutcomeOptions = {}): Promise<LoginOutcome> {
   const { timeoutMs = 45_000, before = null, staleMs = 15_000, settleMs = 6000, pollMs = 600 } = options;
@@ -299,6 +304,7 @@ export async function waitForLoginOutcome(page: Page, options: OutcomeOptions = 
     switch (step.kind) {
       case 'success':
       case 'failed':
+      case 'needs_view':
         return step;
       case 'needs_code':
       case 'needs_approval':
@@ -319,7 +325,7 @@ export async function waitForLoginOutcome(page: Page, options: OutcomeOptions = 
         break;
       case 'unknown_checkpoint':
         if (unknownSince === 0) unknownSince = Date.now();
-        if (Date.now() - unknownSince >= settleMs) return { kind: 'failed', message: step.message };
+        if (Date.now() - unknownSince >= settleMs) return { kind: 'needs_view', message: SECURITY_CHECK_MESSAGE };
         break;
       case 'pending':
         break;

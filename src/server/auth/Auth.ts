@@ -5,7 +5,10 @@
 // - loginWithPassword drives facebook.com/login in a fresh, cookie-less context
 //   (Browser.loginContext) owned by THIS session's attempt, kept across a 2FA code or "approve
 //   from another device" step (expires after 10 minutes). At most MAX_PASSWORD_LOGINS run at once
-//   across all sessions (each one holds a Chrome context).
+//   across all sessions (each one holds a Chrome context). When Facebook asks for something only
+//   the user can answer (a captcha, a checkpoint this code doesn't know), the attempt's page, form
+//   still filled in, becomes the session's login view (RemoteView.adopt, which takes over the
+//   context) and is watched like one opened by openLoginView.
 // - openLoginView opens this session's remote view on Facebook's login page (anonymous profile,
 //   no cookies) and watches it for the c_user session cookie: one watcher per session (a newer one
 //   supersedes it), for at most 15 minutes. Once Facebook has let the user through, the view's
@@ -71,7 +74,8 @@ export interface AuthShape {
    * Log in by driving facebook.com/login in a fresh, cookie-less context (Browser.loginContext)
    * for this session. Never stores or logs the password. On success: save the context's cookies
    * as the account's session (Browser.saveSession), bind this session (Sessions.bindAccount), and
-   * reset the account's search sessions and listing cache.
+   * reset the account's search sessions and listing cache. A captcha (or a checkpoint it can't
+   * answer) opens this session's login view on the attempt's page and returns `window_open`.
    */
   readonly loginWithPassword: (session: ClientSession, request: LoginRequest) => Effect.Effect<AuthStatus, AppError>;
   /** Submit a 2FA / login code after loginWithPassword returned needs_code (this session's attempt). */
@@ -120,7 +124,7 @@ const VIEW_POLL_MS = 1000;
 const VIEW_SETTLE_MS = 1500;
 const VIEW_WATCH_MS = 15 * 60_000;
 
-const VIEW_MESSAGE = "Finish logging in on Facebook's page. It closes by itself once you're in.";
+const VIEW_MESSAGE = "Log in on Facebook's page below, including any security checks. It closes by itself once you're in.";
 const BUSY_MESSAGE = 'Another login is in progress. Try again in a minute.';
 const SESSION_ENDED = 'Your Facebook session has ended. Log in again.';
 
@@ -141,6 +145,8 @@ interface PasswordAttempt {
 /** One session's login view being watched. */
 interface ViewWatch {
   readonly sessionId: ClientSessionId;
+  /** What status says while it is watched. */
+  readonly message: string;
   fiber: Fiber.Fiber<void> | null;
 }
 
@@ -154,8 +160,6 @@ interface Outcome {
 function statusOf(state: AuthState, message: string | null = null, userId: string | null = null, userName: string | null = null): AuthStatus {
   return { state, userId, userName, message };
 }
-
-const WINDOW_OPEN = statusOf('window_open', VIEW_MESSAGE);
 
 function attemptStatus(attempt: PasswordAttempt): AuthStatus {
   return statusOf(attempt.state, attempt.message ?? (attempt.state === 'logging_in' ? 'Logging in to Facebook…' : null));
@@ -354,7 +358,8 @@ const make = Effect.fnUntraced(function* (options: AuthOptions = {}) {
     yield* reconcile(session.id);
     const attempt = attempts.get(session.id);
     if (attempt) return attemptStatus(attempt);
-    if (watches.has(session.id)) return WINDOW_OPEN;
+    const watch = watches.get(session.id);
+    if (watch) return statusOf('window_open', watch.message);
 
     const userId = session.fbUserId;
     if (userId !== null) {
@@ -452,6 +457,29 @@ const make = Effect.fnUntraced(function* (options: AuthOptions = {}) {
 
   // ---------- password login ----------
 
+  /**
+   * Facebook wants something only the user can answer (a captcha): show the attempt's page, with
+   * the form as filled in, as the session's login view and watch it like openLoginView's. The view
+   * takes over the login context (closing the view closes it); if it can't, the context closes
+   * here. Holding the session's lock. Uninterruptible: the context always has exactly one owner.
+   */
+  const handToView = (attempt: PasswordAttempt, message: string) =>
+    Effect.uninterruptible(
+      Effect.gen(function* () {
+        const { sessionId, scope, context, page } = attempt;
+        if (attempts.get(sessionId) === attempt) attempts.delete(sessionId);
+        const adopted = yield* Effect.result(remoteView.adopt(sessionId, { scope, context, page }));
+        if (adopted._tag === 'Failure') {
+          yield* Scope.close(scope, Exit.void);
+          // Every view slot is taken: say so as is.
+          const reason =
+            adopted.failure.code === 'BAD_REQUEST' ? adopted.failure.message : `faceslop couldn't show Facebook's page. ${USE_LOGIN_VIEW}`;
+          return yield* remember(sessionId, 'error', reason);
+        }
+        return yield* watchView(sessionId, message);
+      }),
+    );
+
   const failAttempt = (attempt: PasswordAttempt, message: string) =>
     Effect.gen(function* () {
       if (attempts.get(attempt.sessionId) !== attempt) return yield* currentStatus(attempt.sessionId);
@@ -480,6 +508,8 @@ const make = Effect.fnUntraced(function* (options: AuthOptions = {}) {
           return yield* completeLogin(attempt);
         case 'failed':
           return yield* failAttempt(attempt, outcome.message);
+        case 'needs_view':
+          return yield* handToView(attempt, outcome.message);
         case 'needs_code':
         case 'needs_approval':
           // needs_approval: the ticker polls the page until Facebook lets us in.
@@ -621,7 +651,7 @@ const make = Effect.fnUntraced(function* (options: AuthOptions = {}) {
       const { step: current } = yield* Effect.tryPromise(() => readLoginStep(attempt.page)).pipe(
         Effect.orElseSucceed(() => ({ step: { kind: 'pending' as const }, signature: null })),
       );
-      if (current.kind === 'success' || current.kind === 'failed' || current.kind === 'needs_code') {
+      if (current.kind === 'success' || current.kind === 'failed' || current.kind === 'needs_code' || current.kind === 'needs_view') {
         yield* applyOutcome(attempt, current);
       } else if (current.kind === 'save_device') {
         // waitForLoginOutcome answers the prompt and carries on to the result.
@@ -757,6 +787,16 @@ const make = Effect.fnUntraced(function* (options: AuthOptions = {}) {
       ),
     );
 
+  /** Start watching the session's (just opened) login view. Holding the session's lock. */
+  const watchView = (sessionId: ClientSessionId, message: string) =>
+    Effect.gen(function* () {
+      const watch: ViewWatch = { sessionId, message, fiber: null };
+      watches.set(sessionId, watch);
+      const deadline = (yield* Clock.currentTimeMillis) + viewWatchMs;
+      watch.fiber = yield* Effect.forkIn(watchLoginView(watch, deadline), layerScope);
+      return statusOf('window_open', message);
+    });
+
   const openLoginView = Effect.fn('Auth.openLoginView')(function* (session: ClientSession) {
     return yield* exclusive(
       session.id,
@@ -764,7 +804,8 @@ const make = Effect.fnUntraced(function* (options: AuthOptions = {}) {
         const existing = yield* liveSession(session);
         if (existing) return existing;
         yield* reconcile(session.id);
-        if (watches.has(session.id)) return WINDOW_OPEN;
+        const watch = watches.get(session.id);
+        if (watch) return statusOf('window_open', watch.message);
         yield* endFlows(session.id);
         outcomes.delete(session.id);
 
@@ -774,11 +815,7 @@ const make = Effect.fnUntraced(function* (options: AuthOptions = {}) {
           if (opened.failure.code === 'BAD_REQUEST') return yield* opened.failure;
           return yield* remember(session.id, 'error', `Couldn't open Facebook's login page: ${opened.failure.message}`);
         }
-        const watch: ViewWatch = { sessionId: session.id, fiber: null };
-        watches.set(session.id, watch);
-        const deadline = (yield* Clock.currentTimeMillis) + viewWatchMs;
-        watch.fiber = yield* Effect.forkIn(watchLoginView(watch, deadline), layerScope);
-        return WINDOW_OPEN;
+        return yield* watchView(session.id, VIEW_MESSAGE);
       }),
     );
   });
