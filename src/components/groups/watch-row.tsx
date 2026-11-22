@@ -65,7 +65,7 @@ export function WatchRow({ watch }: { readonly watch: GroupWatch }) {
             )}
             {checkStatus !== '' && ` · ${checkStatus}`}
           </p>
-          {watch.lastError !== null && <p className="text-xs text-destructive">Last check failed: {watch.lastError}</p>}
+          {watch.lastError !== null && <p className="text-xs text-destructive">Last check: {watch.lastError}</p>}
         </ItemContent>
         <ItemActions className="flex-wrap">
           <Link

@@ -4,7 +4,10 @@ import { createHmac } from 'node:crypto';
 import { Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { advanceFeed, type FeedState } from '@/server/groups/feed';
-import { RETRY_DELAYS_MS, attemptOutcome, isForbiddenAddress, isRetryable, signWebhook } from '@/server/webhooks/Webhooks';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { Effect } from 'effect';
+import { RETRY_DELAYS_MS, WebhookTransport, attemptOutcome, isForbiddenAddress, isRetryable, signWebhook } from '@/server/webhooks/Webhooks';
 import { GroupWatchInput, WebhookInput, type GroupPost } from '@/shared/domain';
 
 describe('signWebhook', () => {
@@ -38,7 +41,20 @@ describe('attemptOutcome', () => {
 });
 
 describe('isForbiddenAddress', () => {
-  it.each(['169.254.169.254', '169.254.0.1', '0.0.0.0', '224.0.0.1', '255.255.255.255', '::', 'fe80::1', '[fe80::1]', 'ff02::1', '::ffff:169.254.169.254'])(
+  it.each([
+    '169.254.169.254',
+    '169.254.0.1',
+    '0.0.0.0',
+    '224.0.0.1',
+    '255.255.255.255',
+    '::',
+    'fe80::1',
+    '[fe80::1]',
+    'ff02::1',
+    '::ffff:169.254.169.254',
+    '::ffff:a9fe:a9fe',
+    'fd00:ec2::254',
+  ])(
     'forbids %s',
     (address) => {
       expect(isForbiddenAddress(address)).toBe(true);
@@ -50,6 +66,38 @@ describe('isForbiddenAddress', () => {
       expect(isForbiddenAddress(address)).toBe(false);
     },
   );
+});
+
+describe('the real transport', () => {
+  const transport = Effect.runSync(WebhookTransport);
+
+  it('POSTs the body with its headers, and never follows redirects', async () => {
+    const seen: { method?: string; headers: http.IncomingHttpHeaders; body: string }[] = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk: Buffer) => (body += chunk.toString('utf8')));
+      req.on('end', () => {
+        seen.push({ method: req.method, headers: req.headers, body });
+        res.writeHead(req.url === '/redirect' ? 302 : 204, { location: 'http://169.254.169.254/' }).end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://localhost:${String((server.address() as AddressInfo).port)}`;
+    try {
+      const request = { url: `${base}/hook`, headers: { 'content-type': 'application/json', 'x-faceslop-event': 'test' }, body: '{"a":1}' };
+      expect(await Effect.runPromise(transport.post(request))).toBe(204);
+      expect(seen[0]).toMatchObject({ method: 'POST', body: '{"a":1}', headers: { 'x-faceslop-event': 'test' } });
+      expect(await Effect.runPromise(transport.post({ ...request, url: `${base}/redirect` }))).toBe(302);
+      expect(seen).toHaveLength(2);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => { resolve(); }));
+    }
+  });
+
+  it('refuses forbidden IP literals without connecting', async () => {
+    const error = await Effect.runPromise(Effect.flip(transport.post({ url: 'http://169.254.169.254/latest', headers: {}, body: '' })));
+    expect(error).toContain('not allowed');
+  });
 });
 
 describe('inputs', () => {

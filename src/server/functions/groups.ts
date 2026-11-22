@@ -22,6 +22,7 @@ import {
   OK,
   ResolveGroupRequest,
   UpdateGroupWatchInput,
+  ViewGroupWatchMatchesRequest,
   parseGroupRef,
   type GroupWatch,
   type GroupWatchMatch,
@@ -139,14 +140,14 @@ export const listGroupWatchMatches = createServerFn({ method: 'GET' })
     ),
   );
 
-/** Mark a watch's matches seen (its newMatchCount goes to 0). */
+/** Mark a watch's matches seen up to the newest one shown (later ones still count as new). */
 export const viewGroupWatchMatches = createServerFn({ method: 'POST' })
-  .validator(validate(GroupWatchIdRequest))
+  .validator(validate(ViewGroupWatchMatchesRequest))
   .handler(({ data }) =>
     runEffect(
       Effect.gen(function* () {
         const owner = accountOwner((yield* requireAccount).userId);
-        if (!(yield* GroupWatchesRepo.use((repo) => repo.viewMatches(owner, data.id)))) return yield* watchGone();
+        if (!(yield* GroupWatchesRepo.use((repo) => repo.viewMatches(owner, data.id, data.upTo)))) return yield* watchGone();
         return OK;
       }),
     ),

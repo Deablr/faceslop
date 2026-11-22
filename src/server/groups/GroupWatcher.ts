@@ -30,8 +30,11 @@ import { Webhooks } from '@/server/webhooks/Webhooks';
 import type { GroupWatch, GroupWatchCheckResult, GroupWatchId } from '@/shared/domain';
 import { AppError } from '@/shared/errors';
 
-/** Most pagination requests one check makes (three posts each), after the page's own post. */
-export const MAX_CHECK_PAGES = 6;
+/**
+ * Most pagination requests one check makes (three posts each), after the page's own post. A check
+ * normally stops after one or two (it meets posts it has seen); this is for a burst of new posts.
+ */
+export const MAX_CHECK_PAGES = 15;
 /** A check stops once it has met this many posts it saw before. */
 const SEEN_TO_STOP = 2;
 const MINUTE_MS = 60_000;
@@ -104,12 +107,25 @@ const make = Effect.gen(function* () {
       maxPages: watch.seeded ? MAX_CHECK_PAGES : 1,
       more: (posts) => posts.filter((post) => seen.has(post.id)).length < SEEN_TO_STOP,
     });
-    const recorded = yield* repo.recordCheck(watch.id, latest.posts, (post) => matchPost(post, watch.keywords, watch.excludeKeywords));
+    const recorded = yield* repo.recordCheck(
+      watch.id,
+      latest.posts,
+      (post) => matchPost(post, watch.keywords, watch.excludeKeywords),
+      // Queued in the same transaction, oldest first (a receiver sees them in posting order).
+      (matches) => Effect.forEach([...matches].reverse(), (match) => webhooks.notifyGroupPost(owner, watch, match), { discard: true }),
+    );
     if (Option.isNone(recorded)) return yield* watchNotFound();
+    // It read as far as it may without reaching posts it had seen: older new posts may be missing.
+    const reachedSeen = latest.posts.filter((post) => seen.has(post.id)).length >= Math.min(SEEN_TO_STOP, seen.size);
+    if (watch.seeded && !reachedSeen && latest.hasMore) {
+      yield* repo.markFailed(
+        watch.id,
+        recorded.value.at,
+        `More new posts than one check reads (${String(latest.posts.length)}): some older ones may have been missed. Check more often.`,
+      );
+    }
     const current = yield* repo.get(owner, watch.id);
     if (Option.isNone(current)) return yield* watchNotFound();
-    // Oldest first, so a webhook receiver sees them in posting order.
-    for (const match of [...recorded.value.matches].reverse()) yield* webhooks.notifyGroupPost(owner, current.value, match);
     return { watch: current.value, newPosts: recorded.value.added.length, matches: recorded.value.matches } satisfies GroupWatchCheckResult;
   });
 

@@ -6,9 +6,11 @@
 //
 // A check is recorded atomically (`recordCheck`): the first one of a watch records its baseline
 // (everything seen, nothing matches); later ones record the posts not seen before and, for those
-// that match (the caller's `matchOf`), the post itself and the keywords it matched. Seen rows that
-// didn't match are pruned after SEEN_RETENTION_MS (Facebook's newest-first feed doesn't bring them
-// back); the newest MATCHES_KEPT matches of each watch are kept.
+// that match (the caller's `matchOf`), the post itself and the keywords it matched; the caller's
+// `onMatches` (queueing the webhooks) runs in the same transaction, so a match is never recorded
+// without its deliveries. Seen rows are kept for SEEN_RETENTION_MS (a post Facebook shows again,
+// say a pinned one, must not count as new); beyond the newest MATCHES_KEPT matches of a watch,
+// older matches become plain seen rows (their stored post is dropped).
 import '@tanstack/react-start/server-only';
 import { Array as Arr, Clock, Context, Effect, Layer, Option, Schema } from 'effect';
 import { SqlClient } from 'effect/sql';
@@ -25,7 +27,7 @@ import {
   type GroupWatchPatch,
 } from '@/shared/domain';
 
-export const SEEN_RETENTION_MS = 30 * 24 * 60 * 60_000;
+export const SEEN_RETENTION_MS = 180 * 24 * 60 * 60_000;
 export const MATCHES_KEPT = 200;
 /** How many of the most recently seen post ids a check compares against. */
 export const RECENT_SEEN_LIMIT = 500;
@@ -57,20 +59,25 @@ export interface GroupWatchesRepoShape {
   readonly recentSeenIds: (id: GroupWatchId) => Effect.Effect<ReadonlySet<string>>;
   /**
    * Record one check's posts at the current time. None when the watch was deleted meanwhile.
-   * `matchOf` decides, for each post not seen before, the keywords it matched (null: no match).
+   * `matchOf` decides, for each post not seen before, the keywords it matched (null: no match);
+   * `onMatches` gets the new matches inside the same transaction (not called while seeding).
    */
   readonly recordCheck: (
     id: GroupWatchId,
     posts: readonly GroupPost[],
     matchOf: (post: GroupPost) => readonly string[] | null,
+    onMatches: (matches: readonly GroupWatchMatch[]) => Effect.Effect<void>,
   ) => Effect.Effect<Option.Option<RecordedWatchCheck>>;
   /** A failed check: when, and why (shown on the watch until a check succeeds). */
   readonly markFailed: (id: GroupWatchId, at: number, error: string) => Effect.Effect<void>;
   /** The owner's matches for a watch, newest first. */
   readonly matches: (owner: OwnerKey, id: GroupWatchId, limit: number) => Effect.Effect<readonly GroupWatchMatch[]>;
-  /** Mark the watch's matches seen (newMatchCount goes to 0). False when the watch doesn't exist. */
-  readonly viewMatches: (owner: OwnerKey, id: GroupWatchId) => Effect.Effect<boolean>;
-  /** Drop old non-matching seen rows and all but the newest matches. */
+  /**
+   * Mark the watch's matches seen up to `upTo` (the newest matchedAt the user was shown), so a
+   * match recorded meanwhile still counts as new. False when the watch doesn't exist.
+   */
+  readonly viewMatches: (owner: OwnerKey, id: GroupWatchId, upTo: number) => Effect.Effect<boolean>;
+  /** Drop seen rows older than SEEN_RETENTION_MS; matches beyond the newest MATCHES_KEPT become plain seen rows. */
   readonly prune: (now: number) => Effect.Effect<void>;
 }
 
@@ -193,7 +200,12 @@ const make = Effect.gen(function* () {
   );
 
   const recordCheck = Effect.fn('GroupWatchesRepo.recordCheck')(
-    (id: GroupWatchId, posts: readonly GroupPost[], matchOf: (post: GroupPost) => readonly string[] | null) =>
+    (
+      id: GroupWatchId,
+      posts: readonly GroupPost[],
+      matchOf: (post: GroupPost) => readonly string[] | null,
+      onMatches: (matches: readonly GroupWatchMatch[]) => Effect.Effect<void>,
+    ) =>
       sql.withTransaction(
         Effect.gen(function* () {
           const current = yield* rowById(id);
@@ -222,6 +234,7 @@ const make = Effect.gen(function* () {
                          seeded_at = COALESCE(seeded_at, ${at}),
                          matches_viewed_at = COALESCE(matches_viewed_at, ${at})
                      WHERE id = ${id}`;
+          if (matches.length > 0) yield* onMatches(matches);
           return Option.some<RecordedWatchCheck>({ seeded: seeding, added, matches, at });
         }),
       ),
@@ -255,15 +268,11 @@ const make = Effect.gen(function* () {
   );
 
   const viewMatches = Effect.fn('GroupWatchesRepo.viewMatches')(
-    (owner: OwnerKey, id: GroupWatchId) =>
-      Effect.flatMap(Clock.currentTimeMillis, (now) =>
-        Effect.map(
-          sql`UPDATE group_watches
-              SET matches_viewed_at = MAX(${now}, COALESCE(matches_viewed_at, 0), COALESCE(
-                (SELECT MAX(first_seen_at) FROM group_watch_posts WHERE watch_id = ${id}), 0))
-              WHERE id = ${id} AND owner = ${owner} RETURNING id`,
-          (rows) => rows.length > 0,
-        ),
+    (owner: OwnerKey, id: GroupWatchId, upTo: number) =>
+      Effect.map(
+        sql`UPDATE group_watches SET matches_viewed_at = MAX(COALESCE(matches_viewed_at, 0), ${upTo})
+            WHERE id = ${id} AND owner = ${owner} RETURNING id`,
+        (rows) => rows.length > 0,
       ),
     Effect.orDie,
   );
@@ -273,9 +282,8 @@ const make = Effect.gen(function* () {
       Effect.asVoid(
         sql.withTransaction(
           Effect.gen(function* () {
-            yield* sql`DELETE FROM group_watch_posts
-                       WHERE matched_keywords_json IS NULL AND first_seen_at < ${now - SEEN_RETENTION_MS}`;
-            yield* sql`DELETE FROM group_watch_posts
+            yield* sql`DELETE FROM group_watch_posts WHERE first_seen_at < ${now - SEEN_RETENTION_MS}`;
+            yield* sql`UPDATE group_watch_posts SET matched_keywords_json = NULL, post_json = NULL
                        WHERE matched_keywords_json IS NOT NULL AND rowid NOT IN (
                          SELECT rowid FROM (
                            SELECT rowid, ROW_NUMBER() OVER (PARTITION BY watch_id ORDER BY first_seen_at DESC, rowid DESC) AS n

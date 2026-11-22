@@ -505,9 +505,9 @@ export type GroupId = typeof GroupId.Type;
 export const GroupPostId = Schema.String.check(Schema.isPattern(/^\d{1,25}$/, { message: 'must be a numeric post id' }));
 export type GroupPostId = typeof GroupPostId.Type;
 
-/** A group as pasted by the user: its numeric id or its vanity name ("okpuppies"). */
+/** A group as pasted by the user: its numeric id or its vanity name ("okpuppies"). Never just dots. */
 export const GroupRef = Schema.String.check(
-  Schema.isPattern(/^[A-Za-z0-9._-]{1,100}$/, { message: 'must be a group id or name' }),
+  Schema.isPattern(/^(?!\.+$)[A-Za-z0-9._-]{1,100}$/, { message: 'must be a group id or name' }),
 );
 export type GroupRef = typeof GroupRef.Type;
 
@@ -600,7 +600,8 @@ export function parseGroupRef(input: string): GroupRef | null {
   const text = input.trim();
   const fromUrl = /^(?:https?:\/\/)?(?:[a-z]+\.)?facebook\.com\/groups\/([A-Za-z0-9._-]{1,100})(?:[/?#]|$)/i.exec(text)?.[1];
   const ref = fromUrl ?? text;
-  return /^[A-Za-z0-9._-]{1,100}$/.test(ref) ? ref : null;
+  // Only dots would be a path segment ("..") rather than a group.
+  return /^(?!\.+$)[A-Za-z0-9._-]{1,100}$/.test(ref) ? ref : null;
 }
 
 // ---------- group watches ----------
@@ -609,7 +610,7 @@ export function parseGroupRef(input: string): GroupRef | null {
 export const GroupWatchId = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 999_999_999_999 }));
 export type GroupWatchId = typeof GroupWatchId.Type;
 
-/** Normalized keyword lists (case-insensitive, matched anywhere in the post's text), at most 50. */
+/** Normalized keyword lists (matched at the start of a word, ignoring case and accents), at most 50. */
 const WatchKeywords = Schema.Array(Text(100))
   .check(Schema.isMaxLength(500))
   .pipe(
@@ -674,6 +675,10 @@ export type UpdateGroupWatchInput = typeof UpdateGroupWatchInput.Type;
 
 export const GroupWatchIdRequest = Schema.Struct({ id: GroupWatchId });
 export type GroupWatchIdRequest = typeof GroupWatchIdRequest.Type;
+
+/** Mark a watch's matches seen up to the newest one shown (its matchedAt). */
+export const ViewGroupWatchMatchesRequest = Schema.Struct({ id: GroupWatchId, upTo: EpochMillis });
+export type ViewGroupWatchMatchesRequest = typeof ViewGroupWatchMatchesRequest.Type;
 
 /** A new post that matched a watch. */
 export const GroupWatchMatch = Schema.Struct({

@@ -12,12 +12,17 @@
 //   Redirects are not followed. The body is GroupPostWebhookPayload / TestWebhookPayload.
 // - Targets: any http(s) URL, including private network addresses (Home Assistant on the LAN),
 //   except link-local, unspecified and multicast addresses (cloud metadata endpoints live at
-//   169.254.169.254), checked when a webhook is saved and again before every attempt.
+//   169.254.169.254 and fd00:ec2::254), checked when a webhook is saved, before every attempt, and
+//   on the address the request actually connects to (its DNS lookup is the checked one, so a
+//   hostname can't pass the check and then resolve somewhere else: DNS rebinding).
 // - Payloads hold other people's posts; they are never logged.
 import '@tanstack/react-start/server-only';
 import { createHmac } from 'node:crypto';
+import { lookup as lookupCallback, type LookupAddress } from 'node:dns';
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import http from 'node:http';
+import https from 'node:https';
+import { isIP, type LookupFunction } from 'node:net';
 import { Cause, Clock, Context, Duration, Effect, Layer, Option, Result } from 'effect';
 import { WebhooksRepo, type AttemptOutcome, type DueDelivery } from '@/server/db/repositories/WebhooksRepo';
 import type { OwnerKey } from '@/server/session/identity';
@@ -98,14 +103,80 @@ export function attemptOutcome(attempt: number, httpStatus: number | null, error
 /** True for addresses a webhook may not target: link-local (cloud metadata), unspecified, multicast. */
 export function isForbiddenAddress(address: string): boolean {
   const ip = address.toLowerCase().replace(/^\[|\]$/g, '');
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip)?.[1];
-  const v4 = mapped ?? (isIP(ip) === 4 ? ip : null);
+  const v4 = ipv4Of(ip);
   if (v4 !== null) {
     const [a = 0, b = 0] = v4.split('.').map(Number);
     return a === 0 || (a === 169 && b === 254) || a >= 224;
   }
   if (isIP(ip) !== 6) return false;
-  return ip === '::' || /^fe[89ab]/.test(ip) || ip.startsWith('ff');
+  return ip === '::' || /^fe[89ab]/.test(ip) || ip.startsWith('ff') || ip === 'fd00:ec2::254';
+}
+
+/** The IPv4 address `ip` is (itself, or an IPv4-mapped IPv6 address in either notation), or null. */
+function ipv4Of(ip: string): string | null {
+  if (isIP(ip) === 4) return ip;
+  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip)?.[1];
+  if (dotted !== undefined) return dotted;
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip);
+  if (hex === null) return null;
+  const high = parseInt(hex[1] ?? '0', 16);
+  const low = parseInt(hex[2] ?? '0', 16);
+  return [high >> 8, high & 255, low >> 8, low & 255].join('.');
+}
+
+const FORBIDDEN_TARGET = 'that address is not allowed for webhooks (link-local, unspecified or multicast)';
+
+/**
+ * DNS lookup for webhook connections: the addresses the socket will use, refused when any is one
+ * webhooks may not target. Node calls it for every hostname it connects to (not for IP literals,
+ * which `post` checks itself).
+ */
+const guardedLookup: LookupFunction = (hostname, options, callback) => {
+  lookupCallback(hostname, { ...options, all: true }, (error, addresses: LookupAddress[]) => {
+    if (error) {
+      callback(error, '', 0);
+      return;
+    }
+    const first = addresses[0];
+    if (first === undefined || addresses.some((a) => isForbiddenAddress(a.address))) {
+      callback(Object.assign(new Error(FORBIDDEN_TARGET), { code: 'EFORBIDDEN' }), '', 0);
+      return;
+    }
+    if (options.all === true) callback(null, addresses);
+    else callback(null, first.address, first.family);
+  });
+};
+
+/** POST over node:http(s) through guardedLookup; never follows redirects. Resolves with the status. */
+function postGuarded(request: WebhookRequest): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(request.url);
+    const host = url.hostname.replace(/^\[|\]$/g, '');
+    if (isIP(host) !== 0 && isForbiddenAddress(host)) {
+      reject(new Error(FORBIDDEN_TARGET));
+      return;
+    }
+    const client = url.protocol === 'https:' ? https : http;
+    const req = client.request(
+      url,
+      {
+        method: 'POST',
+        headers: { ...request.headers, 'content-length': String(Buffer.byteLength(request.body)) },
+        lookup: guardedLookup,
+        timeout: REQUEST_TIMEOUT_MS,
+      },
+      (response) => {
+        // The body isn't needed: drain it so the socket is released.
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      },
+    );
+    req.on('timeout', () => {
+      req.destroy(new Error(`no answer within ${String(REQUEST_TIMEOUT_MS / 1000)}s`));
+    });
+    req.on('error', reject);
+    req.end(request.body);
+  });
 }
 
 // ---------- transport (a Reference, so tests never touch the network) ----------
@@ -126,7 +197,7 @@ export interface WebhookTransportShape {
 const describeError = (cause: unknown): string => {
   if (cause instanceof Error) {
     const inner = cause.cause instanceof Error ? `: ${cause.cause.message}` : '';
-    return cause.name === 'TimeoutError' ? `no answer within ${String(REQUEST_TIMEOUT_MS / 1000)}s` : `${cause.message}${inner}`;
+    return `${cause.message}${inner}`;
   }
   return String(cause);
 };
@@ -142,22 +213,7 @@ export const WebhookTransport = Context.Reference<WebhookTransportShape>('facesl
         },
         catch: (cause) => `couldn't find the host (${describeError(cause)})`,
       }),
-    post: (request) =>
-      Effect.tryPromise({
-        try: async () => {
-          const response = await fetch(request.url, {
-            method: 'POST',
-            headers: request.headers,
-            body: request.body,
-            redirect: 'manual',
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-          });
-          // The body isn't needed; don't keep the connection busy reading it.
-          await response.body?.cancel().catch(() => undefined);
-          return response.status;
-        },
-        catch: describeError,
-      }),
+    post: (request) => Effect.tryPromise({ try: () => postGuarded(request), catch: describeError }),
   }),
 });
 
@@ -194,7 +250,7 @@ const make = Effect.gen(function* () {
         addresses.length === 0
           ? "couldn't find the host"
           : addresses.some(isForbiddenAddress)
-            ? 'that address is not allowed for webhooks (link-local, unspecified or multicast)'
+            ? FORBIDDEN_TARGET
             : null,
     });
 
@@ -236,7 +292,7 @@ const make = Effect.gen(function* () {
     const outcome =
       Result.isSuccess(sent)
         ? attemptOutcome(number, sent.success, null, yield* Clock.currentTimeMillis, retries)
-        : attemptOutcome(number, null, sent.failure, yield* Clock.currentTimeMillis, retries);
+        : attemptOutcome(number, null, sent.failure, yield* Clock.currentTimeMillis, retries && sent.failure !== FORBIDDEN_TARGET);
     yield* repo.recordAttempt(delivery.id, outcome);
     if (outcome.status !== 'delivered') {
       yield* Effect.logWarning(`[webhooks] delivery ${String(delivery.id)} to webhook ${String(delivery.webhook.id)}: ${outcome.error ?? ''} (${outcome.status})`);

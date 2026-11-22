@@ -228,11 +228,17 @@ describe('checkNow', () => {
       expect(log.map((d) => d.status)).toEqual(['delivered', 'delivered']);
       expect(log[0]?.summary).toContain('Test Puppy Group');
 
-      // Matches are listed newest first, and viewing them clears the count.
+      // Matches are listed newest first, and viewing them clears the count...
       const matches = yield* GroupWatchesRepo.use((repo) => repo.matches(A, watch.id, 10));
       expect(matches.map((m) => m.post.id).sort()).toEqual(['3', '6']);
-      expect(yield* GroupWatchesRepo.use((repo) => repo.viewMatches(A, watch.id))).toBe(true);
-      expect(Option.getOrThrow(yield* GroupWatchesRepo.use((repo) => repo.get(A, watch.id))).newMatchCount).toBe(0);
+      const shownUpTo = matches[0]?.matchedAt ?? 0;
+      // ...but only up to what was shown: a match found meanwhile stays new.
+      script.feed = [post('7', 'Golden pups, 2 left'), ...script.feed];
+      yield* TestClock.setTime(30_000);
+      yield* checkNow(watch);
+      expect(yield* GroupWatchesRepo.use((repo) => repo.viewMatches(A, watch.id, shownUpTo))).toBe(true);
+      expect(Option.getOrThrow(yield* GroupWatchesRepo.use((repo) => repo.get(A, watch.id))).newMatchCount).toBe(1);
+      expect(yield* GroupWatchesRepo.use((repo) => repo.viewMatches(B, watch.id, 30_000))).toBe(false);
     }).pipe(Effect.provide(watcherLayer(script, sent)));
   });
 
@@ -248,6 +254,22 @@ describe('checkNow', () => {
       expect(result.newPosts).toBe(1);
       // The page's post + one page: it already contains two seen posts.
       expect(script.calls[1]?.returned).toBe(4);
+    }).pipe(Effect.provide(watcherLayer(script, sent)));
+  });
+
+  it.effect('a burst of new posts bigger than one check can read is flagged on the watch', () => {
+    const script = makeScript([post('1', 'old'), post('2', 'old')]);
+    const sent = makeSent();
+    return Effect.gen(function* () {
+      const watch = yield* createWatch();
+      yield* checkNow(watch);
+      const burst = Array.from({ length: 3 * MAX_CHECK_PAGES + 10 }, (_, i) => post(String(1000 - i), 'new'));
+      script.feed = [...burst, ...script.feed];
+      const result = yield* checkNow(watch);
+      expect(result.newPosts).toBe(1 + 3 * MAX_CHECK_PAGES);
+      expect(result.watch.lastError).toContain('More new posts than one check reads');
+      // The next check catches up with the rest and clears it.
+      expect((yield* checkNow(watch)).watch.lastError).toBeNull();
     }).pipe(Effect.provide(watcherLayer(script, sent)));
   });
 
@@ -275,6 +297,38 @@ describe('checkNow', () => {
       expect(script.calls).toEqual([]);
     }).pipe(Effect.provide(watcherLayer(script, sent)));
   });
+});
+
+describe('GroupWatchesRepo', () => {
+  it.effect('records nothing when queueing the matches fails (one transaction)', () =>
+    Effect.gen(function* () {
+      const watch = yield* createWatch();
+      const repo = yield* GroupWatchesRepo;
+      yield* repo.recordCheck(watch.id, [post('1', 'a')], () => null, () => Effect.void); // baseline
+      const exit = yield* Effect.exit(repo.recordCheck(watch.id, [post('2', 'b')], () => [], () => Effect.die('queue failed')));
+      expect(exit._tag).toBe('Failure');
+      expect([...(yield* repo.recentSeenIds(watch.id))]).toEqual(['1']);
+      expect((yield* repo.matches(A, watch.id, 10)).length).toBe(0);
+    }).pipe(Effect.provide(watcherLayer(makeScript(), makeSent()))),
+  );
+
+  it.effect('pruning keeps seen posts for 180 days and turns old matches into plain seen rows', () =>
+    Effect.gen(function* () {
+      const watch = yield* createWatch();
+      const repo = yield* GroupWatchesRepo;
+      yield* TestClock.setTime(1);
+      yield* repo.recordCheck(watch.id, [post('1', 'a')], () => null, () => Effect.void);
+      const many = Array.from({ length: 205 }, (_, i) => post(String(100 + i), 'x'));
+      yield* TestClock.setTime(2);
+      yield* repo.recordCheck(watch.id, many, () => [], () => Effect.void);
+      yield* repo.prune(100 * 24 * 60 * MINUTE);
+      expect((yield* repo.matches(A, watch.id, 1000)).length).toBe(200);
+      // Demoted, not forgotten: still seen, so never "new" again.
+      expect((yield* repo.recentSeenIds(watch.id)).size).toBe(206);
+      yield* repo.prune(181 * 24 * 60 * MINUTE);
+      expect((yield* repo.recentSeenIds(watch.id)).size).toBe(0);
+    }).pipe(Effect.provide(watcherLayer(makeScript(), makeSent()))),
+  );
 });
 
 describe('runCycle', () => {

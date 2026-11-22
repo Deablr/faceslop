@@ -206,7 +206,8 @@ export const groupWatchesQuery = queryOptions({
 
 /**
  * A watch's matches, newest first. Showing them marks them seen: when the cached watch has new
- * ones, they are marked viewed on the server and its count goes to 0 (like savedSearchRunQuery).
+ * ones, they are marked viewed on the server up to the newest one fetched (a match recorded
+ * meanwhile stays new) and its count goes to 0. A failed "mark seen" doesn't fail the list.
  */
 export const groupWatchMatchesQuery = (id: number, queryClient: QueryClient) =>
   queryOptions({
@@ -214,11 +215,16 @@ export const groupWatchMatchesQuery = (id: number, queryClient: QueryClient) =>
     queryFn: async (): Promise<readonly GroupWatchMatch[]> => {
       const matches = await listGroupWatchMatches({ data: { id } });
       const watch = queryClient.getQueryData<readonly GroupWatch[]>(queryKeys.groupWatches)?.find((w) => w.id === id);
-      if (watch !== undefined && watch.newMatchCount > 0) {
-        await viewGroupWatchMatches({ data: { id } });
-        queryClient.setQueryData<readonly GroupWatch[]>(queryKeys.groupWatches, (list) =>
-          list?.map((w) => (w.id === id ? { ...w, newMatchCount: 0 } : w)),
-        );
+      const newest = matches[0]?.matchedAt;
+      if (watch !== undefined && watch.newMatchCount > 0 && newest !== undefined) {
+        try {
+          await viewGroupWatchMatches({ data: { id, upTo: newest } });
+          queryClient.setQueryData<readonly GroupWatch[]>(queryKeys.groupWatches, (list) =>
+            list?.map((w) => (w.id === id ? { ...w, newMatchCount: 0 } : w)),
+          );
+        } catch {
+          // They stay marked new; the next look tries again.
+        }
       }
       return matches;
     },

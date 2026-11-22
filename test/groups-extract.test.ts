@@ -123,7 +123,7 @@ describe('parseGroupRef', () => {
     expect(parseGroupRef(input)).toBe(ref);
   });
 
-  it.each(['https://example.com/groups/1/', 'https://www.facebook.com/marketplace/', 'two words', ''])('rejects %s', (input) => {
+  it.each(['https://example.com/groups/1/', 'https://www.facebook.com/marketplace/', 'two words', '', '..', '.', 'https://www.facebook.com/groups/../'])('rejects %s', (input) => {
     expect(parseGroupRef(input)).toBeNull();
   });
 });
