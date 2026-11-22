@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit && effect-language-service diagnostics --project tsconfig.json --strict --format text",
     "test": "vitest run",
     "smoke": "tsx scripts/smoke.ts",
-    "check": "npm run lint && npm run typecheck && npm run test"
+    "check": "npm run lint && npm run typecheck && npm run test",
+    "smoke:groups": "tsx scripts/smoke-groups.ts"
   },
   "dependencies": {
     "@effect/sql-sqlite-node": "^4.0.6",

@@ -1,4 +1,5 @@
-// Guards for the remote view: it only ever shows Marketplace (plus Facebook's login/2FA pages).
+// Guards for the remote view: it only ever shows Marketplace, single group posts and single
+// Messenger threads (plus Facebook's login/2FA pages).
 // Port of legacy/src/server/fb/focus-guards.ts (the "focused window" guards).
 //
 // Two layers, because Facebook is a single-page app:
@@ -32,6 +33,8 @@ export function isAllowedFocusedUrl(url: string): boolean {
     /^\/marketplace(\/|$)/,
     // A single chat thread (Marketplace conversations open here); not the Messenger inbox.
     /^\/messages\/(e2ee\/)?t\/[^/]+/,
+    // A single group post (to comment on it); never the group's feed.
+    /^\/groups\/[^/]+\/(posts|permalink)\/\d+(\/|$)/,
     // Staying logged in: login, 2FA, checkpoints, account recovery, consent prompts.
     /^\/login(\.php)?(\/|$)/,
     /^\/(checkpoint|two_step_verification|two_factor|auth_platform|recover)(\/|$)/,
@@ -51,7 +54,7 @@ div[role="button"][aria-label="New message"] { display: none !important; }
   transition: opacity 200ms ease; opacity: 0;
 }`;
 
-const NOTICE = 'Only Marketplace lives here, so that link stays closed.';
+const NOTICE = 'Only Marketplace (and the one post or chat you opened) lives here, so that link stays closed.';
 
 interface GuardConfig {
   readonly home: string;

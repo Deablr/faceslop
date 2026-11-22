@@ -16,14 +16,28 @@ import { getAuthStatus } from '@/server/functions/auth';
 import { listBlockedSellers } from '@/server/functions/blocked-sellers';
 import { getCategories, getListing, getLocations, loadMore, search } from '@/server/functions/browse';
 import { listFavorites } from '@/server/functions/favorites';
+import {
+  getGroupPost,
+  groupFeed,
+  listGroupWatchMatches,
+  listGroupWatches,
+  listJoinedGroups,
+  loadMoreGroupPosts,
+  viewGroupWatchMatches,
+} from '@/server/functions/groups';
 import { listHidden } from '@/server/functions/hidden';
 import { getRemoteViewState } from '@/server/functions/remote-view';
 import { listSavedSearches, runSavedSearch } from '@/server/functions/saved-searches';
 import { getSettings } from '@/server/functions/settings';
+import { listWebhookDeliveries, listWebhooks } from '@/server/functions/webhooks';
 import type {
   AppAuthStatus,
   AuthStatus,
   Favorite,
+  GroupFeedPage,
+  GroupPost,
+  GroupWatch,
+  GroupWatchMatch,
   ListingSummary,
   SavedSearch,
   SavedSearchRunResult,
@@ -148,6 +162,92 @@ export const savedSearchRunQuery = (id: number, queryClient: QueryClient) =>
     refetchOnReconnect: false,
     retry: false,
   });
+
+// ---------- groups ----------
+// Read from Facebook as this browser's account (seconds each): client-only, never refetched
+// behind the user's back. Watches and webhooks are local data.
+
+/** The account's groups (the server caches them for 10 minutes too). */
+export const joinedGroupsQuery = queryOptions({
+  queryKey: queryKeys.joinedGroups,
+  queryFn: () => listJoinedGroups(),
+  staleTime: 10 * 60_000,
+  retry: false,
+});
+
+/** A group's newest posts, one explicit "Load more" at a time (like searchQuery). */
+export const groupFeedQuery = (groupId: string) =>
+  infiniteQueryOptions({
+    queryKey: queryKeys.groupFeed(groupId),
+    queryFn: ({ pageParam }): Promise<GroupFeedPage> =>
+      pageParam === null ? groupFeed({ data: { groupId } }) : loadMoreGroupPosts({ data: { sessionId: pageParam } }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => (last.hasMore && last.sessionId !== null ? last.sessionId : undefined),
+    staleTime: Infinity,
+    gcTime: 15 * 60_000,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    retry: false,
+  });
+
+/** One post with its first comments. */
+export const groupPostQuery = (groupId: string, postId: string) =>
+  queryOptions({
+    queryKey: queryKeys.groupPost(groupId, postId),
+    queryFn: () => getGroupPost({ data: { groupId, postId } }),
+    staleTime: 2 * 60_000,
+    retry: false,
+  });
+
+export const groupWatchesQuery = queryOptions({
+  queryKey: queryKeys.groupWatches,
+  queryFn: () => listGroupWatches(),
+});
+
+/**
+ * A watch's matches, newest first. Showing them marks them seen: when the cached watch has new
+ * ones, they are marked viewed on the server and its count goes to 0 (like savedSearchRunQuery).
+ */
+export const groupWatchMatchesQuery = (id: number, queryClient: QueryClient) =>
+  queryOptions({
+    queryKey: queryKeys.groupWatchMatches(id),
+    queryFn: async (): Promise<readonly GroupWatchMatch[]> => {
+      const matches = await listGroupWatchMatches({ data: { id } });
+      const watch = queryClient.getQueryData<readonly GroupWatch[]>(queryKeys.groupWatches)?.find((w) => w.id === id);
+      if (watch !== undefined && watch.newMatchCount > 0) {
+        await viewGroupWatchMatches({ data: { id } });
+        queryClient.setQueryData<readonly GroupWatch[]>(queryKeys.groupWatches, (list) =>
+          list?.map((w) => (w.id === id ? { ...w, newMatchCount: 0 } : w)),
+        );
+      }
+      return matches;
+    },
+  });
+
+export const webhooksQuery = queryOptions({
+  queryKey: queryKeys.webhooks,
+  queryFn: () => listWebhooks(),
+});
+
+export const webhookDeliveriesQuery = (id: number) =>
+  queryOptions({
+    queryKey: queryKeys.webhookDeliveries(id),
+    queryFn: () => listWebhookDeliveries({ data: { id } }),
+  });
+
+/** A post already in a cached feed, so its page can show something while Facebook loads. */
+export function findCachedGroupPost(queryClient: QueryClient, groupId: string, postId: string): GroupPost | undefined {
+  const feed = queryClient.getQueryData<InfiniteData<GroupFeedPage, string | null>>(queryKeys.groupFeed(groupId));
+  for (const page of feed?.pages ?? []) {
+    const hit = page.posts.find((p) => p.id === postId);
+    if (hit !== undefined) return hit;
+  }
+  for (const [, matches] of queryClient.getQueriesData<readonly GroupWatchMatch[]>({ queryKey: queryKeys.groupWatchMatchLists })) {
+    const hit = matches?.find((m) => m.post.id === postId && m.post.groupId === groupId);
+    if (hit !== undefined) return hit.post;
+  }
+  return undefined;
+}
 
 // ---------- cache helpers ----------
 

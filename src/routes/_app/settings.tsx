@@ -5,6 +5,7 @@ import { LocalDataNote } from '@/components/local-data-note';
 import { AppLockSection, FacebookAccountSection } from '@/components/settings/account-sections';
 import { BlockedSellersSection, HiddenListingsSection } from '@/components/settings/list-sections';
 import { PreferenceSections } from '@/components/settings/preference-sections';
+import { WebhooksSection } from '@/components/settings/webhooks-section';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useUpdateSettings } from '@/hooks/mutations';
 import { blockedSellersQuery, hiddenQuery, settingsQuery, settled } from '@/lib/queries';
@@ -60,6 +61,7 @@ function SettingsPage() {
       )}
       <BlockedSellersSection />
       <HiddenListingsSection />
+      <WebhooksSection />
       <FacebookAccountSection />
       <AppLockSection />
     </div>

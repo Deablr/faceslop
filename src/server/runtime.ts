@@ -12,19 +12,25 @@ import '@tanstack/react-start/server-only';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { Auth } from '@/server/auth/Auth';
 import { Browser } from '@/server/browser/Browser';
+import { BackgroundLane } from '@/server/checker/BackgroundLane';
 import { Checker } from '@/server/checker/Checker';
 import { AppConfig } from '@/server/config';
 import { DatabaseLayer } from '@/server/db/Database';
 import { ClientSessionsRepo } from '@/server/db/repositories/ClientSessionsRepo';
 import { BlockedSellersRepo } from '@/server/db/repositories/BlockedSellersRepo';
 import { FavoritesRepo } from '@/server/db/repositories/FavoritesRepo';
+import { GroupWatchesRepo } from '@/server/db/repositories/GroupWatchesRepo';
 import { HiddenListingsRepo } from '@/server/db/repositories/HiddenListingsRepo';
 import { SavedSearchesRepo } from '@/server/db/repositories/SavedSearchesRepo';
 import { SettingsRepo } from '@/server/db/repositories/SettingsRepo';
+import { WebhooksRepo } from '@/server/db/repositories/WebhooksRepo';
+import { GroupWatcher } from '@/server/groups/GroupWatcher';
+import { Groups } from '@/server/groups/Groups';
 import { Marketplace } from '@/server/marketplace/Marketplace';
 import { Messaging } from '@/server/messaging/Messaging';
 import { RemoteView } from '@/server/remote-view/RemoteView';
 import { Sessions } from '@/server/session/Sessions';
+import { Webhooks } from '@/server/webhooks/Webhooks';
 
 /** Every service a server function can use. */
 export const AppLayer = Layer.mergeAll(
@@ -42,7 +48,13 @@ export const AppLayer = Layer.mergeAll(
   Messaging.layer,
   RemoteView.layer,
   Sessions.layer,
+  BackgroundLane.layer,
   Checker.layer,
+  GroupWatchesRepo.layer,
+  WebhooksRepo.layer,
+  Groups.layer,
+  Webhooks.layer,
+  GroupWatcher.layer,
 );
 
 /** The services available to effects run through the bridge (src/server/bridge.ts). */

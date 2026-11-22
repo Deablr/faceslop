@@ -29,6 +29,10 @@ describe('isAllowedFocusedUrl', () => {
     'https://www.facebook.com/messages/t/1234567890/',
     'https://www.facebook.com/messages/t/1234567890',
     'https://www.facebook.com/messages/e2ee/t/9876543210/',
+    // one group post
+    'https://www.facebook.com/groups/1000000000000001/posts/2000000000000002/',
+    'https://www.facebook.com/groups/okpuppies/posts/2000000000000002/?comment_id=3',
+    'https://www.facebook.com/groups/1000000000000001/permalink/2000000000000002/',
     // staying logged in
     'https://www.facebook.com/login/',
     'https://www.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2Fmarketplace%2F',
@@ -59,6 +63,11 @@ describe('isAllowedFocusedUrl', () => {
     'https://www.facebook.com/notifications',
     'https://www.facebook.com/groups/feed/',
     'https://www.facebook.com/groups/123/',
+    'https://www.facebook.com/groups/123/?sorting_setting=CHRONOLOGICAL',
+    'https://www.facebook.com/groups/123/posts/',
+    'https://www.facebook.com/groups/123/posts/abc/',
+    'https://www.facebook.com/groups/123/members/',
+    'https://www.facebook.com/groups/joins/',
     'https://www.facebook.com/friends',
     'https://www.facebook.com/gaming/',
     'https://www.facebook.com/events/',
@@ -113,14 +122,14 @@ describe('remoteTargetUrl', () => {
     expect(remoteTargetUrl('inbox')).toBe('https://www.facebook.com/marketplace/inbox/');
     expect(remoteTargetUrl('selling')).toBe('https://www.facebook.com/marketplace/you/selling/');
     expect(remoteTargetUrl('create')).toBe('https://www.facebook.com/marketplace/create/item/');
-    expect(remoteTargetUrl('listing', '2461492287676369')).toBe('https://www.facebook.com/marketplace/item/2461492287676369/');
+    expect(remoteTargetUrl('listing', { listingId: '2461492287676369' })).toBe('https://www.facebook.com/marketplace/item/2461492287676369/');
     expect(remoteTargetUrl('login')).toBe(LOGIN_URL);
     expect(LOGIN_URL).toBe('https://www.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2Fmarketplace%2F');
   });
 
   it('every target URL passes the guard, and so does the guard home', () => {
     for (const target of RemoteTarget.literals) {
-      const url = remoteTargetUrl(target, '1');
+      const url = remoteTargetUrl(target, { listingId: '1', groupId: '2', postId: '3', userId: '4' });
       expect(url, target).not.toBeNull();
       expect(isAllowedFocusedUrl(url ?? ''), target).toBe(true);
     }
@@ -129,18 +138,30 @@ describe('remoteTargetUrl', () => {
 
   it('rejects listing targets without a usable id', () => {
     expect(remoteTargetUrl('listing')).toBeNull();
-    expect(remoteTargetUrl('listing', '../watch')).toBeNull();
-    expect(remoteTargetUrl('listing', '12a')).toBeNull();
+    expect(remoteTargetUrl('listing', { listingId: '../watch' })).toBeNull();
+    expect(remoteTargetUrl('listing', { listingId: '12a' })).toBeNull();
     // Facebook loops on ids longer than 20 digits.
-    expect(remoteTargetUrl('listing', '1'.repeat(21))).toBeNull();
-    expect(remoteTargetUrl('listing', ' 123 ')).toBe('https://www.facebook.com/marketplace/item/123/');
+    expect(remoteTargetUrl('listing', { listingId: '1'.repeat(21) })).toBeNull();
+    expect(remoteTargetUrl('listing', { listingId: ' 123 ' })).toBe('https://www.facebook.com/marketplace/item/123/');
   });
 
-  it('only Marketplace pages that are useless logged out need a session', () => {
+  it('opens one group post, or one Messenger thread, by numeric ids only', () => {
+    expect(remoteTargetUrl('groupPost', { groupId: '11', postId: '22' })).toBe('https://www.facebook.com/groups/11/posts/22/');
+    expect(remoteTargetUrl('groupPost', { groupId: '11' })).toBeNull();
+    expect(remoteTargetUrl('groupPost', { groupId: 'feed', postId: '22' })).toBeNull();
+    expect(remoteTargetUrl('groupPost', { groupId: '11', postId: '../../watch' })).toBeNull();
+    expect(remoteTargetUrl('message', { userId: '100012345678' })).toBe('https://www.facebook.com/messages/t/100012345678/');
+    expect(remoteTargetUrl('message', { userId: 'zuck' })).toBeNull();
+    expect(remoteTargetUrl('message')).toBeNull();
+  });
+
+  it('only pages that are useless logged out need a session', () => {
     expect(Object.entries(REMOTE_TARGETS).filter(([, info]) => info.needsLogin).map(([target]) => target)).toEqual([
       'inbox',
       'selling',
       'create',
+      'groupPost',
+      'message',
     ]);
   });
 });

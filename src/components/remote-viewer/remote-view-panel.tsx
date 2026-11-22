@@ -28,6 +28,8 @@ const TARGET_NAMES: Record<RemoteTarget, string> = {
   selling: 'your listings',
   create: 'a new listing',
   listing: 'a listing',
+  groupPost: 'a group post',
+  message: 'Messenger',
 };
 
 /** The server's remote-view state; a failed check counts as closed. */

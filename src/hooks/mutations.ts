@@ -1,14 +1,22 @@
 // Mutation hooks. Each keeps the affected caches correct (optimistic where it's cheap and safe).
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { appLogin, appLogout } from '@/server/functions/app-auth';
 import { cancelLogin, getAuthStatus, login, logout, submitLoginCode } from '@/server/functions/auth';
 import { blockSeller, unblockSeller } from '@/server/functions/blocked-sellers';
 import { addFavorite, removeFavorite } from '@/server/functions/favorites';
+import {
+  checkGroupWatch,
+  createGroupWatch,
+  deleteGroupWatch,
+  resolveGroup,
+  updateGroupWatch,
+} from '@/server/functions/groups';
 import { clearHidden, hideListing, unhideListing } from '@/server/functions/hidden';
 import { sendMessage } from '@/server/functions/messaging';
 import { closeRemoteView, openRemoteView } from '@/server/functions/remote-view';
 import { createSavedSearch, deleteSavedSearch, updateSavedSearch } from '@/server/functions/saved-searches';
 import { updateSettings } from '@/server/functions/settings';
+import { createWebhook, deleteWebhook, testWebhook, updateWebhook } from '@/server/functions/webhooks';
 import { onSessionChanged, onUnlocked, storeAuthStatus } from '@/lib/account-change';
 import { queryKeys, removeCachedListings } from '@/lib/queries';
 import type {
@@ -16,6 +24,9 @@ import type {
   AuthStatus,
   BlockedSellerInput,
   Favorite,
+  GroupWatch,
+  GroupWatchInputEncoded,
+  GroupWatchPatchEncoded,
   HiddenListingInput,
   ListingSummary,
   LoginRequest,
@@ -24,6 +35,9 @@ import type {
   SavedSearchPatch,
   Settings,
   SettingsPatch,
+  Webhook,
+  WebhookInputEncoded,
+  WebhookPatch,
 } from '@/shared/domain';
 import { CLOSED_REMOTE_VIEW_STATE, type OpenRemoteViewRequest, type RemoteViewState } from '@/shared/remote-view';
 
@@ -278,5 +292,113 @@ export function useAppLogout() {
     onSuccess: (status) => {
       queryClient.setQueryData<AppAuthStatus>(queryKeys.appAuth, status);
     },
+  });
+}
+
+// ---------- group watches ----------
+
+const replaceWatch = (queryClient: QueryClient, watch: GroupWatch) => {
+  queryClient.setQueryData<readonly GroupWatch[]>(queryKeys.groupWatches, (list) => list?.map((w) => (w.id === watch.id ? watch : w)));
+};
+
+/** Which group a pasted link is (loads its page as this account). */
+export function useResolveGroup() {
+  return useMutation({ mutationFn: (ref: string) => resolveGroup({ data: { ref } }) });
+}
+
+export function useCreateGroupWatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: GroupWatchInputEncoded) => createGroupWatch({ data: input }),
+    onSuccess: (watch) => {
+      queryClient.setQueryData<readonly GroupWatch[]>(queryKeys.groupWatches, (list = []) => [watch, ...list.filter((w) => w.id !== watch.id)]);
+      return queryClient.invalidateQueries({ queryKey: queryKeys.groupWatches });
+    },
+  });
+}
+
+export function useUpdateGroupWatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { readonly id: number; readonly patch: GroupWatchPatchEncoded }) => updateGroupWatch({ data: { id, patch } }),
+    onSuccess: (watch) => {
+      replaceWatch(queryClient, watch);
+    },
+  });
+}
+
+export function useDeleteGroupWatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => deleteGroupWatch({ data: { id } }),
+    onSuccess: (_ok, id) => {
+      queryClient.setQueryData<readonly GroupWatch[]>(queryKeys.groupWatches, (list) => list?.filter((w) => w.id !== id));
+      queryClient.removeQueries({ queryKey: queryKeys.groupWatchMatches(id) });
+    },
+  });
+}
+
+/** "Check now": reads the group as this account and sends any matches to the webhooks. */
+export function useCheckGroupWatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => checkGroupWatch({ data: { id } }),
+    onSuccess: (result) => {
+      replaceWatch(queryClient, result.watch);
+      return queryClient.invalidateQueries({ queryKey: queryKeys.groupWatchMatches(result.watch.id) });
+    },
+    // A failed check is recorded on the watch (lastError).
+    onError: () => queryClient.invalidateQueries({ queryKey: queryKeys.groupWatches }),
+  });
+}
+
+
+// ---------- webhooks ----------
+
+const replaceWebhook = (queryClient: QueryClient, webhook: Webhook) => {
+  queryClient.setQueryData<readonly Webhook[]>(queryKeys.webhooks, (list) => list?.map((w) => (w.id === webhook.id ? webhook : w)));
+};
+
+export function useCreateWebhook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: WebhookInputEncoded) => createWebhook({ data: input }),
+    onSuccess: (webhook) => {
+      queryClient.setQueryData<readonly Webhook[]>(queryKeys.webhooks, (list = []) => [...list.filter((w) => w.id !== webhook.id), webhook]);
+    },
+  });
+}
+
+export function useUpdateWebhook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { readonly id: number; readonly patch: WebhookPatch }) => updateWebhook({ data: { id, patch } }),
+    onSuccess: (webhook) => {
+      replaceWebhook(queryClient, webhook);
+    },
+  });
+}
+
+export function useDeleteWebhook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => deleteWebhook({ data: { id } }),
+    onSuccess: (_ok, id) => {
+      queryClient.setQueryData<readonly Webhook[]>(queryKeys.webhooks, (list) => list?.filter((w) => w.id !== id));
+      queryClient.removeQueries({ queryKey: queryKeys.webhookDeliveries(id) });
+    },
+  });
+}
+
+/** "Send test": a signed test event, now. The webhook's latest delivery and log change. */
+export function useTestWebhook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => testWebhook({ data: { id } }),
+    onSettled: (_result, _error, id) =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.webhooks }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.webhookDeliveries(id) }),
+      ]),
   });
 }

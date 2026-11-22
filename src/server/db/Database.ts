@@ -149,6 +149,72 @@ export const migrations = {
       value TEXT NOT NULL
     )`,
   ),
+  /**
+   * Group watches (one per owner and group: which new posts to report) with the posts each has
+   * seen, and webhooks with their delivery log. Owners are always accounts ("fb:<id>"): groups
+   * need a Facebook login.
+   */
+  '0003_group_watches_and_webhooks': statements(
+    `CREATE TABLE group_watches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner TEXT NOT NULL,
+      group_id TEXT NOT NULL,
+      group_name TEXT NOT NULL,
+      keywords_json TEXT NOT NULL DEFAULT '[]',
+      exclude_keywords_json TEXT NOT NULL DEFAULT '[]',
+      interval_minutes INTEGER NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      -- The last check, failed or not (the next one is interval_minutes after it).
+      last_checked_at INTEGER,
+      last_error TEXT,
+      -- NULL until the first check recorded what was already posted ("seeded").
+      seeded_at INTEGER,
+      -- Matches first seen after this are new (newMatchCount).
+      matches_viewed_at INTEGER,
+      UNIQUE (owner, group_id)
+    )`,
+    `CREATE TABLE group_watch_posts (
+      watch_id INTEGER NOT NULL REFERENCES group_watches(id) ON DELETE CASCADE,
+      post_id TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL,
+      -- NULL unless the post matched: the watch keywords it contained (JSON array).
+      matched_keywords_json TEXT,
+      -- The post as it was seen, for matches only.
+      post_json TEXT,
+      PRIMARY KEY (watch_id, post_id)
+    )`,
+    `CREATE INDEX group_watch_posts_by_time ON group_watch_posts (watch_id, first_seen_at)`,
+    `CREATE TABLE webhooks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner TEXT NOT NULL,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      secret TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX webhooks_by_owner ON webhooks (owner, created_at)`,
+    `CREATE TABLE webhook_deliveries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      webhook_id INTEGER NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+      -- X-Faceslop-Delivery: the same for every retry.
+      delivery_uuid TEXT NOT NULL UNIQUE,
+      event TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      -- 'pending' | 'delivered' | 'failed'
+      status TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      http_status INTEGER,
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      last_attempt_at INTEGER,
+      next_attempt_at INTEGER
+    )`,
+    `CREATE INDEX webhook_deliveries_due ON webhook_deliveries (status, next_attempt_at)`,
+    `CREATE INDEX webhook_deliveries_by_webhook ON webhook_deliveries (webhook_id, created_at)`,
+  ),
 };
 
 /** SqlClient for a database file (or ':memory:'), with foreign keys on and all migrations applied. */

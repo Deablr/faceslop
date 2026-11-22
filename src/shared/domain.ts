@@ -493,6 +493,339 @@ export const DEFAULT_SETTINGS: Settings = {
   desktopNotifications: false,
 };
 
+// ---------- Facebook groups ----------
+// Groups are read as the browser's Facebook account (private groups only show to members), so
+// every groups server function needs a logged-in browser (NOT_LOGGED_IN otherwise).
+
+/** A Facebook group's numeric id. */
+export const GroupId = Schema.String.check(Schema.isPattern(/^\d{1,25}$/, { message: 'must be a numeric group id' }));
+export type GroupId = typeof GroupId.Type;
+
+/** A group post's numeric id (Facebook's `post_id`). */
+export const GroupPostId = Schema.String.check(Schema.isPattern(/^\d{1,25}$/, { message: 'must be a numeric post id' }));
+export type GroupPostId = typeof GroupPostId.Type;
+
+/** A group as pasted by the user: its numeric id or its vanity name ("okpuppies"). */
+export const GroupRef = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9._-]{1,100}$/, { message: 'must be a group id or name' }),
+);
+export type GroupRef = typeof GroupRef.Type;
+
+/** A group the account belongs to (the groups list). */
+export const GroupSummary = Schema.Struct({
+  id: GroupId,
+  name: Text(300),
+  url: HttpUrl,
+  imageUrl: Schema.NullOr(HttpUrl),
+  /** When something was last posted, when Facebook says. */
+  lastPostAt: Schema.NullOr(EpochMillis),
+});
+export type GroupSummary = typeof GroupSummary.Type;
+
+/** A post's or comment's author. */
+export const GroupPerson = Schema.Struct({
+  /** Facebook user id; null for anonymous posts. */
+  id: Schema.NullOr(FbId),
+  name: Text(200),
+  url: Schema.NullOr(HttpUrl),
+  imageUrl: Schema.NullOr(HttpUrl),
+});
+export type GroupPerson = typeof GroupPerson.Type;
+
+export const MAX_POST_IMAGES = 30;
+
+export const GroupPost = Schema.Struct({
+  id: GroupPostId,
+  groupId: GroupId,
+  groupName: Schema.NullOr(Text(300)),
+  author: Schema.NullOr(GroupPerson),
+  /** The post's text ('' for photo-only posts). */
+  text: Text(10_000),
+  /** Unix epoch milliseconds, null when Facebook didn't include it. */
+  createdAt: Schema.NullOr(EpochMillis),
+  /** Photo URLs in post order (Facebook's signed CDN URLs: they expire after a while). */
+  images: Schema.Array(HttpUrl).check(Schema.isMaxLength(MAX_POST_IMAGES)),
+  /** Has a video (faceslop shows a link to it instead of playing it). */
+  hasVideo: Schema.Boolean,
+  commentCount: Schema.NullOr(NonNegativeInt),
+  /** Canonical facebook.com URL of the post (used only for the remote view and webhooks). */
+  url: HttpUrl,
+});
+export type GroupPost = typeof GroupPost.Type;
+
+export const GroupComment = Schema.Struct({
+  id: Text(64),
+  author: Schema.NullOr(GroupPerson),
+  text: Text(8_000),
+  createdAt: Schema.NullOr(EpochMillis),
+  replyCount: NonNegativeInt,
+});
+export type GroupComment = typeof GroupComment.Type;
+
+export const GroupPostDetail = Schema.Struct({
+  ...GroupPost.fields,
+  /** The top-level comments Facebook shows first (not every comment of a busy post). */
+  comments: Schema.Array(GroupComment),
+  /** Facebook lets this account comment (commenting happens in the live view). */
+  canComment: Schema.Boolean,
+});
+export type GroupPostDetail = typeof GroupPostDetail.Type;
+
+/** A group's identity as its page shows it. */
+export const GroupInfo = Schema.Struct({ id: GroupId, name: Schema.NullOr(Text(300)) });
+export type GroupInfo = typeof GroupInfo.Type;
+
+/** One page of a group's newest posts. */
+export const GroupFeedPage = Schema.Struct({
+  /** Handle for loadMoreGroupPosts(); null when there are no more pages. */
+  sessionId: Schema.NullOr(Schema.String),
+  group: GroupInfo,
+  posts: Schema.Array(GroupPost),
+  hasMore: Schema.Boolean,
+});
+export type GroupFeedPage = typeof GroupFeedPage.Type;
+
+export const GroupRequest = Schema.Struct({ groupId: GroupId });
+export type GroupRequest = typeof GroupRequest.Type;
+
+export const GroupPostRequest = Schema.Struct({ groupId: GroupId, postId: GroupPostId });
+export type GroupPostRequest = typeof GroupPostRequest.Type;
+
+/** A pasted group URL ("https://www.facebook.com/groups/okpuppies/") or a bare id/name. */
+export const ResolveGroupRequest = Schema.Struct({ ref: TrimmedText(500) });
+export type ResolveGroupRequest = typeof ResolveGroupRequest.Type;
+
+/** The group id or vanity name in a pasted group URL or bare reference, or null. */
+export function parseGroupRef(input: string): GroupRef | null {
+  const text = input.trim();
+  const fromUrl = /^(?:https?:\/\/)?(?:[a-z]+\.)?facebook\.com\/groups\/([A-Za-z0-9._-]{1,100})(?:[/?#]|$)/i.exec(text)?.[1];
+  const ref = fromUrl ?? text;
+  return /^[A-Za-z0-9._-]{1,100}$/.test(ref) ? ref : null;
+}
+
+// ---------- group watches ----------
+
+/** Group watch primary key (positive integer). */
+export const GroupWatchId = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 999_999_999_999 }));
+export type GroupWatchId = typeof GroupWatchId.Type;
+
+/** Normalized keyword lists (case-insensitive, matched anywhere in the post's text), at most 50. */
+const WatchKeywords = Schema.Array(Text(100))
+  .check(Schema.isMaxLength(500))
+  .pipe(
+    Schema.decodeTo(
+      Schema.Array(Schema.String).check(Schema.isMaxLength(50, { message: 'at most 50 keywords' })),
+      SchemaTransformation.transform<readonly string[], readonly string[]>({ decode: normalizeKeywords, encode: (k) => k }),
+    ),
+  );
+
+export const MIN_WATCH_INTERVAL_MINUTES = 5;
+export const DEFAULT_WATCH_INTERVAL_MINUTES = 15;
+
+/** How often a watched group is checked, in minutes. */
+export const WatchIntervalMinutes = Schema.Int.check(
+  Schema.isBetween({ minimum: MIN_WATCH_INTERVAL_MINUTES, maximum: 1440 }, { message: 'must be between 5 and 1440' }),
+);
+
+export const GroupWatch = Schema.Struct({
+  id: GroupWatchId,
+  groupId: GroupId,
+  groupName: Schema.String,
+  /** A new post matches when its text contains any of these; empty = every new post matches. */
+  keywords: Schema.Array(Schema.String),
+  /** A post containing any of these never matches. */
+  excludeKeywords: Schema.Array(Schema.String),
+  intervalMinutes: Schema.Int,
+  /** Background checks (and webhooks) only run when true. */
+  enabled: Schema.Boolean,
+  createdAt: EpochMillis,
+  lastCheckedAt: Schema.NullOr(EpochMillis),
+  /** Why the last check failed (cleared by the next good one). */
+  lastError: Schema.NullOr(Schema.String),
+  /** False until the first check recorded what was already posted (nothing before it counts as new). */
+  seeded: Schema.Boolean,
+  /** Matching posts found since the matches were last viewed. */
+  newMatchCount: NonNegativeInt,
+});
+export type GroupWatch = typeof GroupWatch.Type;
+
+export const GroupWatchInput = Schema.Struct({
+  groupId: GroupId,
+  groupName: RequiredText(300),
+  keywords: WatchKeywords.pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  excludeKeywords: WatchKeywords.pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  intervalMinutes: WatchIntervalMinutes.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_WATCH_INTERVAL_MINUTES))),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
+});
+export type GroupWatchInput = typeof GroupWatchInput.Type;
+export type GroupWatchInputEncoded = typeof GroupWatchInput.Encoded;
+
+export const GroupWatchPatch = Schema.Struct({
+  keywords: Schema.optionalKey(WatchKeywords),
+  excludeKeywords: Schema.optionalKey(WatchKeywords),
+  intervalMinutes: Schema.optionalKey(WatchIntervalMinutes),
+  enabled: Schema.optionalKey(Schema.Boolean),
+});
+export type GroupWatchPatch = typeof GroupWatchPatch.Type;
+export type GroupWatchPatchEncoded = typeof GroupWatchPatch.Encoded;
+
+export const UpdateGroupWatchInput = Schema.Struct({ id: GroupWatchId, patch: GroupWatchPatch });
+export type UpdateGroupWatchInput = typeof UpdateGroupWatchInput.Type;
+
+export const GroupWatchIdRequest = Schema.Struct({ id: GroupWatchId });
+export type GroupWatchIdRequest = typeof GroupWatchIdRequest.Type;
+
+/** A new post that matched a watch. */
+export const GroupWatchMatch = Schema.Struct({
+  watchId: GroupWatchId,
+  post: GroupPost,
+  /** The watch keywords found in the post ([] when the watch has none). */
+  matchedKeywords: Schema.Array(Schema.String),
+  matchedAt: EpochMillis,
+});
+export type GroupWatchMatch = typeof GroupWatchMatch.Type;
+
+export const GroupWatchCheckResult = Schema.Struct({
+  watch: GroupWatch,
+  /** Posts seen for the first time by this check. */
+  newPosts: NonNegativeInt,
+  /** Of those, the ones that matched (and went to the webhooks). */
+  matches: Schema.Array(GroupWatchMatch),
+});
+export type GroupWatchCheckResult = typeof GroupWatchCheckResult.Type;
+
+// ---------- webhooks ----------
+
+/** Webhook primary key (positive integer). */
+export const WebhookId = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 999_999_999_999 }));
+export type WebhookId = typeof WebhookId.Type;
+
+/** Where a webhook POSTs: an absolute http(s) URL without credentials. */
+export const WebhookUrl = Schema.Trim.check(
+  Schema.isMaxLength(2000),
+  Schema.makeFilter(
+    (value: string) => {
+      let url: URL;
+      try {
+        url = new URL(value);
+      } catch {
+        return 'must be a URL';
+      }
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') return 'must be an http(s) URL';
+      if (url.username !== '' || url.password !== '') return 'must not contain a user name or password';
+      return url.hostname === '' ? 'must have a host' : undefined;
+    },
+    { message: 'must be an http(s) URL' },
+  ),
+);
+
+export const WebhookEvent = Schema.Literals(['group.post', 'test']);
+export type WebhookEvent = typeof WebhookEvent.Type;
+
+export const WebhookDeliveryStatus = Schema.Literals(['pending', 'delivered', 'failed']);
+export type WebhookDeliveryStatus = typeof WebhookDeliveryStatus.Type;
+
+export const WebhookDelivery = Schema.Struct({
+  id: Schema.Int,
+  webhookId: WebhookId,
+  event: WebhookEvent,
+  /** One line: what it was about ("New post in Oklahoma small puppies"). */
+  summary: Schema.String,
+  status: WebhookDeliveryStatus,
+  attempts: NonNegativeInt,
+  /** The last attempt's HTTP status (null before any answer). */
+  httpStatus: Schema.NullOr(Schema.Int),
+  error: Schema.NullOr(Schema.String),
+  createdAt: EpochMillis,
+  lastAttemptAt: Schema.NullOr(EpochMillis),
+  /** When a pending delivery is tried again. */
+  nextAttemptAt: Schema.NullOr(EpochMillis),
+});
+export type WebhookDelivery = typeof WebhookDelivery.Type;
+
+export const Webhook = Schema.Struct({
+  id: WebhookId,
+  name: Schema.String,
+  url: Schema.String,
+  /** HMAC-SHA256 key for the X-Faceslop-Signature header (only ever shown to its owner). */
+  secret: Schema.String,
+  enabled: Schema.Boolean,
+  createdAt: EpochMillis,
+  lastDelivery: Schema.NullOr(WebhookDelivery),
+});
+export type Webhook = typeof Webhook.Type;
+
+const WebhookName = RequiredText(100);
+
+export const WebhookInput = Schema.Struct({
+  name: WebhookName,
+  url: WebhookUrl,
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
+});
+export type WebhookInput = typeof WebhookInput.Type;
+export type WebhookInputEncoded = typeof WebhookInput.Encoded;
+
+export const WebhookPatch = Schema.Struct({
+  name: Schema.optionalKey(WebhookName),
+  url: Schema.optionalKey(WebhookUrl),
+  enabled: Schema.optionalKey(Schema.Boolean),
+  /** Replace the signing secret with a new random one. */
+  rotateSecret: Schema.optionalKey(Schema.Boolean),
+});
+export type WebhookPatch = typeof WebhookPatch.Type;
+
+export const UpdateWebhookInput = Schema.Struct({ id: WebhookId, patch: WebhookPatch });
+export type UpdateWebhookInput = typeof UpdateWebhookInput.Type;
+
+export const WebhookIdRequest = Schema.Struct({ id: WebhookId });
+export type WebhookIdRequest = typeof WebhookIdRequest.Type;
+
+export const WebhookTestResult = Schema.Struct({
+  ok: Schema.Boolean,
+  httpStatus: Schema.NullOr(Schema.Int),
+  error: Schema.NullOr(Schema.String),
+});
+export type WebhookTestResult = typeof WebhookTestResult.Type;
+
+/**
+ * The JSON body of a "group.post" webhook (version 1). Headers: X-Faceslop-Event,
+ * X-Faceslop-Delivery (the delivery id; retries reuse it), X-Faceslop-Timestamp (unix seconds) and
+ * X-Faceslop-Signature: "sha256=" + hex HMAC-SHA256(secret, `${timestamp}.${body}`).
+ */
+export interface GroupPostWebhookPayload {
+  readonly version: 1;
+  readonly event: 'group.post';
+  readonly deliveryId: string;
+  /** ISO 8601. */
+  readonly sentAt: string;
+  readonly watch: {
+    readonly id: GroupWatchId;
+    readonly groupId: GroupId;
+    readonly groupName: string;
+    readonly matchedKeywords: readonly string[];
+  };
+  readonly post: {
+    readonly id: GroupPostId;
+    readonly url: string;
+    readonly text: string;
+    readonly author: { readonly name: string; readonly url: string | null } | null;
+    /** ISO 8601, null when unknown. */
+    readonly createdAt: string | null;
+    readonly images: readonly string[];
+    readonly hasVideo: boolean;
+    readonly commentCount: number | null;
+  };
+}
+
+/** The JSON body of a "test" webhook (the "Send test" button). */
+export interface TestWebhookPayload {
+  readonly version: 1;
+  readonly event: 'test';
+  readonly deliveryId: string;
+  readonly sentAt: string;
+  readonly message: string;
+}
+
 // ---------- misc ----------
 
 export const Ok = Schema.Struct({ ok: Schema.Literal(true) });

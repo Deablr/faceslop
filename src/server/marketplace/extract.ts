@@ -20,7 +20,7 @@ import type {
   SellerInfo,
 } from '@/shared/domain';
 
-type Obj = Readonly<Record<PropertyKey, unknown>>;
+export type Obj = Readonly<Record<PropertyKey, unknown>>;
 
 export interface PageInfo {
   readonly endCursor: string | null;
@@ -43,13 +43,13 @@ export interface PageTokens {
   readonly userId: string;
 }
 
-// ---------- generic helpers ----------
+// ---------- generic helpers (also used by src/server/groups/extract.ts) ----------
 
-const isObj = (v: unknown): v is Obj => Predicate.isObject(v);
-const str = (v: unknown): string | null => (Predicate.isString(v) && v.length > 0 ? v : null);
-const idStr = (v: unknown): string | null =>
+export const isObj = (v: unknown): v is Obj => Predicate.isObject(v);
+export const str = (v: unknown): string | null => (Predicate.isString(v) && v.length > 0 ? v : null);
+export const idStr = (v: unknown): string | null =>
   Predicate.isString(v) && v.length > 0 ? v : Predicate.isNumber(v) && Number.isFinite(v) ? String(v) : null;
-const get = (o: unknown, ...path: readonly string[]): unknown => {
+export const get = (o: unknown, ...path: readonly string[]): unknown => {
   let cur = o;
   for (const k of path) {
     if (!isObj(cur)) return undefined;
@@ -57,7 +57,7 @@ const get = (o: unknown, ...path: readonly string[]): unknown => {
   }
   return cur;
 };
-const num = (v: unknown): number | null => {
+export const num = (v: unknown): number | null => {
   if (Predicate.isNumber(v)) return Number.isFinite(v) ? v : null;
   if (Predicate.isString(v) && v.trim() !== '') {
     const n = Number(v.replace(/,/g, ''));
@@ -70,7 +70,7 @@ const num = (v: unknown): number | null => {
  * Depth-first walk over parsed JSON, in document order. `visit` returns false to skip an
  * object's children. Iterative so deeply nested Relay payloads can't overflow the stack.
  */
-function walk(root: unknown, visit: (o: Obj) => boolean | undefined): void {
+export function walk(root: unknown, visit: (o: Obj) => boolean | undefined): void {
   const stack: unknown[] = [root];
   while (stack.length > 0) {
     const cur = stack.pop();
@@ -88,7 +88,7 @@ function walk(root: unknown, visit: (o: Obj) => boolean | undefined): void {
 }
 
 /** Every object (in document order) that has `key`. Doesn't descend into matches. */
-function findAll(root: unknown, key: string): Obj[] {
+export function findAll(root: unknown, key: string): Obj[] {
   const out: Obj[] = [];
   walk(root, (o) => {
     if (key in o) {

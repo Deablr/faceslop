@@ -8,10 +8,19 @@ interface KeywordInputProps {
   readonly id: string;
   readonly values: readonly string[];
   readonly onChange: (values: readonly string[]) => void;
+  /** Names the list of chips for screen readers. */
+  readonly listLabel?: string;
+  readonly placeholder?: string;
 }
 
 /** Free-text words: Enter or comma adds (case-insensitive, de-duplicated), each chip removes. */
-export function KeywordInput({ id, values, onChange }: KeywordInputProps) {
+export function KeywordInput({
+  id,
+  values,
+  onChange,
+  listLabel = 'Excluded keywords',
+  placeholder = 'e.g. broken, parts only',
+}: KeywordInputProps) {
   const [text, setText] = useState('');
 
   const add = () => {
@@ -42,7 +51,7 @@ export function KeywordInput({ id, values, onChange }: KeywordInputProps) {
           onKeyDown={onKeyDown}
           onBlur={add}
           enterKeyHint="done"
-          placeholder="e.g. broken, parts only"
+          placeholder={placeholder}
         />
         <InputGroupAddon align="inline-end">
           <InputGroupButton size="icon-xs" aria-label="Add keyword" onPress={add} isDisabled={text.trim() === ''}>
@@ -51,7 +60,7 @@ export function KeywordInput({ id, values, onChange }: KeywordInputProps) {
         </InputGroupAddon>
       </InputGroup>
       {values.length > 0 && (
-        <ul aria-label="Excluded keywords" className="flex flex-wrap gap-1.5">
+        <ul aria-label={listLabel} className="flex flex-wrap gap-1.5">
           {values.map((value) => (
             <li key={value} className="inline-flex h-7 items-center gap-0.5 rounded-md bg-secondary pr-0.5 pl-2.5 text-sm text-secondary-foreground">
               {value}

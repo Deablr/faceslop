@@ -610,8 +610,13 @@ const make = Effect.fnUntraced(function* (options: RemoteViewOptions = {}) {
     requestedProfile: FbProfile,
     request: OpenRemoteViewRequest,
   ) {
-    const url = remoteTargetUrl(request.target, request.listingId);
-    if (url === null) return yield* new AppError({ code: 'BAD_REQUEST', message: 'Facebook has no listing with that id.' });
+    const url = remoteTargetUrl(request.target, request);
+    if (url === null) {
+      return yield* new AppError({
+        code: 'BAD_REQUEST',
+        message: request.target === 'listing' ? 'Facebook has no listing with that id.' : "That isn't a Facebook page faceslop can open.",
+      });
+    }
     // The login page starts without cookies: Auth saves whichever account logs in there.
     const profile = request.target === 'login' ? ANONYMOUS_PROFILE : requestedProfile;
     const info = REMOTE_TARGETS[request.target];

@@ -13,6 +13,10 @@ How it works: a headless Chrome on the server (Playwright) carries each person's
 and reads Marketplace data from the JSON Facebook embeds in its own pages. faceslop's UI shows that
 data. Nothing goes anywhere except your faceslop server and facebook.com.
 
+It also reads your Facebook groups the same way: a group's newest posts, one post with its
+comments, and **group watches** that check a group in the background and send matching new posts
+to your own **webhooks** (signed JSON), say a local puppy group and "golden, doodle".
+
 Calm by design: an explicit "Load more" instead of infinite scroll, no autoplay, no badges or
 notifications unless you turn them on, an optional "you've been browsing a while" nudge, and
 reduced motion respected.
@@ -250,6 +254,58 @@ faceslop holds logged-in Facebook sessions, so by default it only talks to your 
   one at a time for everyone, with 3–8 s pauses between requests. When Facebook pushes back, the
   checker backs off (doubling, up to 6 hours).
 
+## Groups and webhooks
+
+The **Groups** page lists your Facebook groups (read as your account, so private groups you're in
+work too). Open one for its newest posts, with an explicit "Load more", and open a post for its
+photos and first comments. Commenting on a post, or messaging its author, opens just that post or
+that Messenger thread in the remote view; the group's feed itself never opens there.
+
+**Watch** a group to hear about new posts:
+
+- **Keywords** (optional): a post matches when a word in it starts with one of them, ignoring case
+  and accents ("golden" matches "Goldendoodle"). Without keywords, every new post matches.
+  **Skip posts with** keywords ("iso", "looking for") veto a match. Photo-only posts have no
+  text, so only a watch without keywords gets them.
+- **How often**: every 5 minutes to once a day (15 minutes by default). Every check reads the
+  group as your Facebook account: the group page plus a few "more posts" requests (three posts
+  each), stopping as soon as it reaches posts it has seen. Checking very often makes Facebook more
+  likely to ask your account to verify itself.
+- The first check records what's already posted; only posts after it count. Matches are kept on
+  the group's **Matches** tab and sent to your webhooks. "Check now" checks right away.
+
+**Webhooks** (Settings → Webhooks) belong to your Facebook account. Every enabled webhook gets each
+match as a `POST` with a JSON body:
+
+```json
+{
+  "version": 1,
+  "event": "group.post",
+  "deliveryId": "6f1c…",
+  "sentAt": "2026-11-21T19:30:00.000Z",
+  "watch": { "id": 3, "groupId": "1234567890", "groupName": "Puppies near me", "matchedKeywords": ["golden"] },
+  "post": {
+    "id": "987654321",
+    "url": "https://www.facebook.com/groups/1234567890/posts/987654321/",
+    "text": "Goldendoodle puppies ready Dec 1",
+    "author": { "name": "Jane Doe", "url": "https://www.facebook.com/jane.doe" },
+    "createdAt": "2026-11-21T19:28:41.000Z",
+    "images": ["https://scontent.xx.fbcdn.net/…"],
+    "hasVideo": false,
+    "commentCount": 2
+  }
+}
+```
+
+Headers: `X-Faceslop-Event` (`group.post`, or `test` from "Send test"), `X-Faceslop-Delivery` (the
+same on every retry, so you can de-duplicate), `X-Faceslop-Timestamp` (unix seconds) and
+`X-Faceslop-Signature: sha256=<hex>`, an HMAC-SHA256 of `<timestamp>.<raw body>` with the
+webhook's signing secret (shown in Settings). Answer with any 2xx. Server errors, timeouts (10 s)
+and 408/425/429 are retried after 1 min, 5 min, 30 min, 2 h and 6 h; other 4xx answers and
+redirects fail at once (redirects aren't followed). Photo links are Facebook's signed CDN URLs and
+expire after a while. A webhook may point at your LAN (Home Assistant, n8n), but not at link-local,
+unspecified or multicast addresses (that rules out cloud metadata endpoints).
+
 ## Background checks
 
 One background loop starts about a minute after boot. For each account (and each browser that
@@ -260,13 +316,19 @@ that disappears from Marketplace is marked sold. New saved searches record a bas
 so only listings posted later count as new. "Run now" on a saved search shows everything that's
 new since you last looked.
 
+Group watches have a loop of their own (see Groups and webhooks), but it shares one lane with the
+checker: faceslop never sends two background requests to Facebook at once. When Facebook blocks an
+account's group check, that account's watches wait (15 minutes, doubling up to 6 hours). Webhook
+deliveries go out from a third loop (every 5 seconds); it never talks to Facebook.
+
 ## Data
 
 Everything lives in `FACESLOP_DATA_DIR` (`./.data`, or the `faceslop-data` volume):
 
 - `faceslop.db` (SQLite): settings, favorites, saved searches and the listings they've seen,
   hidden listings and blocked sellers (each belonging to a Facebook account, or to a browser that
-  hasn't logged in yet), and browser sessions (token hashes, and which account each is logged in
+  hasn't logged in yet), group watches with the posts they've seen (30 days; the 200 newest
+  matches are kept), webhooks with their delivery log (30 days), and browser sessions (token hashes, and which account each is logged in
   with). A legacy v1 database is reused as is.
 - `fb-sessions/<Facebook user id>.json`: each account's Facebook session cookies (mode 0600,
   directory 0700). A single-user `fb-session.json` from an older faceslop is moved here at
@@ -286,6 +348,7 @@ Delete the directory (or the volume) to forget everything.
 | `npm test` | Vitest (`FACESLOP_SKIP_BROWSER_TESTS=1` skips the headless-Chrome tests). |
 | `npm run check` | lint + typecheck + test. |
 | `npm run smoke` | Live smoke test against facebook.com (logged-out browsing). |
+| `npm run smoke:groups` | Live groups check as your logged-in account: `FACESLOP_SMOKE_GROUP=<group id> npm run smoke:groups` (log in through faceslop first; it reads, never writes, the session). |
 
 Built with TanStack Start (React 19, SSR, server functions), Effect, shadcn/ui on React Aria,
 Tailwind CSS and Playwright. See `CLAUDE.md` for the architecture.

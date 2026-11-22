@@ -21,10 +21,12 @@
 //   blocks one ACCOUNT's check (its checkpoint, its ended session), only that account's remaining
 //   work is skipped this cycle. AppConfig.disableChecker turns
 //   off all background Facebook work: the loop and the post-create seeds.
-// - Background Facebook work (cycle calls and seeds) goes through one permit, so it never runs two
-//   Facebook requests at once. "Run now" doesn't wait for it: the user is waiting.
+// - Background Facebook work (cycle calls and seeds) goes through the BackgroundLane, one permit
+//   shared with the GroupWatcher, so the server never runs two background Facebook requests at
+//   once. "Run now" doesn't wait for it: the user is waiting.
 import '@tanstack/react-start/server-only';
-import { Cause, Clock, Context, Duration, Effect, Exit, FiberSet, Layer, Option, Random, Semaphore } from 'effect';
+import { Cause, Clock, Context, Duration, Effect, Exit, FiberSet, Layer, Option, Random } from 'effect';
+import { BackgroundLane } from '@/server/checker/BackgroundLane';
 import { AppConfig } from '@/server/config';
 import { ACTIVE_SESSION_WINDOW_MS, ClientSessionsRepo } from '@/server/db/repositories/ClientSessionsRepo';
 import { FavoritesRepo } from '@/server/db/repositories/FavoritesRepo';
@@ -204,8 +206,8 @@ const make = Effect.gen(function* () {
   const clientSessions = yield* ClientSessionsRepo;
   const timing = yield* CheckerTiming;
 
-  /** One permit for background Facebook work: the cycle's calls and seeds never overlap. */
-  const backgroundLane = yield* Semaphore.make(1);
+  /** One permit for background Facebook work: the cycle's calls, seeds and group checks never overlap. */
+  const backgroundLane = yield* BackgroundLane;
   /** Seeds run here; closing the layer's scope interrupts them. */
   const seeds = yield* FiberSet.make();
   /** When each active owner's last cycle ended. */
@@ -431,7 +433,7 @@ export class Checker extends Context.Service<Checker, CheckerShape>()('faceslop/
     }),
   );
 
-  /** Needs the repositories, Marketplace and AppConfig (tests provide their own). */
+  /** Needs the repositories, Marketplace, BackgroundLane and AppConfig (tests provide their own). */
   static readonly layerNoDeps = Layer.effect(Checker, make);
 
   /** The layer the app runs: starts the background loop unless AppConfig.disableChecker. */
@@ -442,6 +444,7 @@ export class Checker extends Context.Service<Checker, CheckerShape>()('faceslop/
       SettingsRepo.layer,
       ClientSessionsRepo.layer,
       Marketplace.layer,
+      BackgroundLane.layer,
       AppConfig.layer,
     ]),
   );
