@@ -54,11 +54,13 @@ function GroupPage() {
 function GroupView({ groupId }: { readonly groupId: string }) {
   const { tab = 'posts' } = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
-  // Loaded from Facebook only once the posts are shown (not for a visit to the Matches tab).
-  const feed = useInfiniteQuery({ ...groupFeedQuery(groupId), enabled: tab === 'posts' });
   const { data: watches } = useQuery(groupWatchesQuery);
+  const watchOfGroup = watches?.find((w) => w.groupId === groupId);
+  // Loaded from Facebook once the posts are shown; on the Matches tab only when there's no watch
+  // to name the group (a new watch must not be saved as "Group").
+  const feed = useInfiniteQuery({ ...groupFeedQuery(groupId), enabled: tab === 'posts' || watchOfGroup === undefined });
   const { data: joined } = useQuery({ ...joinedGroupsQuery, enabled: false });
-  const watch = watches?.find((w) => w.groupId === groupId);
+  const watch = watchOfGroup;
   const name = feed.data?.pages[0]?.group.name ?? watch?.groupName ?? joined?.find((g) => g.id === groupId)?.name ?? 'Group';
 
   const onTab = (next: GroupTab) => {
