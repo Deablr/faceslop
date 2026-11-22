@@ -112,12 +112,15 @@ export function isForbiddenAddress(address: string): boolean {
   return ip === '::' || /^fe[89ab]/.test(ip) || ip.startsWith('ff') || ip === 'fd00:ec2::254';
 }
 
-/** The IPv4 address `ip` is (itself, or an IPv4-mapped IPv6 address in either notation), or null. */
+/**
+ * The IPv4 address `ip` is or carries (itself, or an IPv4-mapped, IPv4-compatible or NAT64
+ * `64:ff9b::/96` IPv6 address, dotted or hex), or null.
+ */
 function ipv4Of(ip: string): string | null {
   if (isIP(ip) === 4) return ip;
-  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip)?.[1];
+  const dotted = /^(?:::ffff:|::|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/.exec(ip)?.[1];
   if (dotted !== undefined) return dotted;
-  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip);
+  const hex = /^(?:::ffff:|::|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip);
   if (hex === null) return null;
   const high = parseInt(hex[1] ?? '0', 16);
   const low = parseInt(hex[2] ?? '0', 16);

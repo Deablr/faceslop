@@ -8,8 +8,9 @@
 // (everything seen, nothing matches); later ones record the posts not seen before and, for those
 // that match (the caller's `matchOf`), the post itself and the keywords it matched; the caller's
 // `onMatches` (queueing the webhooks) runs in the same transaction, so a match is never recorded
-// without its deliveries. Seen rows are kept for SEEN_RETENTION_MS (a post Facebook shows again,
-// say a pinned one, must not count as new); beyond the newest MATCHES_KEPT matches of a watch,
+// without its deliveries. Seen rows are kept for SEEN_RETENTION_MS, and a watch's newest
+// SEEN_ALWAYS_KEPT forever (a post Facebook shows again, say a pinned one or the top of a quiet
+// group, must not count as new); beyond the newest MATCHES_KEPT matches of a watch,
 // older matches become plain seen rows (their stored post is dropped).
 import '@tanstack/react-start/server-only';
 import { Array as Arr, Clock, Context, Effect, Layer, Option, Schema } from 'effect';
@@ -29,6 +30,8 @@ import {
 
 export const SEEN_RETENTION_MS = 180 * 24 * 60 * 60_000;
 export const MATCHES_KEPT = 200;
+/** However old, a watch's newest seen posts are kept (a quiet group's feed still shows them). */
+export const SEEN_ALWAYS_KEPT = 100;
 /** How many of the most recently seen post ids a check compares against. */
 export const RECENT_SEEN_LIMIT = 500;
 
@@ -217,7 +220,8 @@ const make = Effect.gen(function* () {
           const seeding = watch.seeded_at === null;
           const added: GroupPost[] = [];
           const matches: GroupWatchMatch[] = [];
-          for (const post of posts) {
+          // Oldest first, so rowid order (the tie-break within one check) follows the feed.
+          for (const post of [...posts].reverse()) {
             const keywords = seeding ? null : matchOf(post);
             const inserted = yield* sql`
               INSERT INTO group_watch_posts (watch_id, post_id, first_seen_at, matched_keywords_json, post_json)
@@ -226,8 +230,8 @@ const make = Effect.gen(function* () {
               ON CONFLICT (watch_id, post_id) DO NOTHING
               RETURNING post_id`;
             if (inserted.length === 0 || seeding) continue;
-            added.push(post);
-            if (keywords !== null) matches.push({ watchId: id, post, matchedKeywords: keywords, matchedAt: at });
+            added.unshift(post);
+            if (keywords !== null) matches.unshift({ watchId: id, post, matchedKeywords: keywords, matchedAt: at });
           }
           yield* sql`UPDATE group_watches
                      SET last_checked_at = ${at}, last_error = NULL,
@@ -270,7 +274,9 @@ const make = Effect.gen(function* () {
   const viewMatches = Effect.fn('GroupWatchesRepo.viewMatches')(
     (owner: OwnerKey, id: GroupWatchId, upTo: number) =>
       Effect.map(
-        sql`UPDATE group_watches SET matches_viewed_at = MAX(COALESCE(matches_viewed_at, 0), ${upTo})
+        // Never past the newest match there is (upTo comes from the client).
+        sql`UPDATE group_watches SET matches_viewed_at = MAX(COALESCE(matches_viewed_at, 0), MIN(${upTo}, COALESCE(
+              (SELECT MAX(first_seen_at) FROM group_watch_posts WHERE watch_id = ${id} AND matched_keywords_json IS NOT NULL), 0)))
             WHERE id = ${id} AND owner = ${owner} RETURNING id`,
         (rows) => rows.length > 0,
       ),
@@ -282,7 +288,12 @@ const make = Effect.gen(function* () {
       Effect.asVoid(
         sql.withTransaction(
           Effect.gen(function* () {
-            yield* sql`DELETE FROM group_watch_posts WHERE first_seen_at < ${now - SEEN_RETENTION_MS}`;
+            yield* sql`DELETE FROM group_watch_posts
+                       WHERE first_seen_at < ${now - SEEN_RETENTION_MS} AND rowid NOT IN (
+                         SELECT rowid FROM (
+                           SELECT rowid, ROW_NUMBER() OVER (PARTITION BY watch_id ORDER BY first_seen_at DESC, rowid DESC) AS n
+                           FROM group_watch_posts
+                         ) WHERE n <= ${SEEN_ALWAYS_KEPT})`;
             yield* sql`UPDATE group_watch_posts SET matched_keywords_json = NULL, post_json = NULL
                        WHERE matched_keywords_json IS NOT NULL AND rowid NOT IN (
                          SELECT rowid FROM (

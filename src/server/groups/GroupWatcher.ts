@@ -107,6 +107,11 @@ const make = Effect.gen(function* () {
       maxPages: watch.seeded ? MAX_CHECK_PAGES : 1,
       more: (posts) => posts.filter((post) => seen.has(post.id)).length < SEEN_TO_STOP,
     });
+    // Reached posts it has seen (two, or all it knows): nothing new can be further down.
+    const reachedSeen = latest.posts.filter((post) => seen.has(post.id)).length >= Math.min(SEEN_TO_STOP, seen.size);
+    // A next page failed before that: recording the partial read would skip the posts below it
+    // for good (the next check stops at these). Fail the check instead; it's retried in full.
+    if (latest.stoppedBy !== null && watch.seeded && !reachedSeen) return yield* latest.stoppedBy;
     const recorded = yield* repo.recordCheck(
       watch.id,
       latest.posts,
@@ -116,7 +121,6 @@ const make = Effect.gen(function* () {
     );
     if (Option.isNone(recorded)) return yield* watchNotFound();
     // It read as far as it may without reaching posts it had seen: older new posts may be missing.
-    const reachedSeen = latest.posts.filter((post) => seen.has(post.id)).length >= Math.min(SEEN_TO_STOP, seen.size);
     if (watch.seeded && !reachedSeen && latest.hasMore) {
       yield* repo.markFailed(
         watch.id,

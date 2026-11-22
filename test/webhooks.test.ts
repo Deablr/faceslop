@@ -53,6 +53,9 @@ describe('isForbiddenAddress', () => {
     'ff02::1',
     '::ffff:169.254.169.254',
     '::ffff:a9fe:a9fe',
+    '::a9fe:a9fe',
+    '64:ff9b::a9fe:a9fe',
+    '64:ff9b::169.254.169.254',
     'fd00:ec2::254',
   ])(
     'forbids %s',

@@ -41,6 +41,8 @@ const post = (id: string, text: string): GroupPost => ({
 interface FeedScript {
   feed: GroupPost[];
   failWith: AppError | null;
+  /** A next page fails after this many pages were read. */
+  failAfterPages: number | null;
   readonly calls: { readonly profile: string; readonly groupId: string; readonly maxPages: number; readonly returned: number }[];
 }
 
@@ -60,11 +62,16 @@ const fakeGroups = (script: FeedScript) =>
         Effect.suspend(() => {
           if (script.failWith) return Effect.fail(script.failWith);
           const posts = script.feed.slice(0, 1);
+          let stoppedBy: AppError | null = null;
           for (let page = 0; page < options.maxPages && posts.length < script.feed.length && options.more(posts); page++) {
+            if (script.failAfterPages === page) {
+              stoppedBy = new AppError({ code: 'FB_BLOCKED', message: 'checkpoint' });
+              break;
+            }
             posts.push(...script.feed.slice(posts.length, posts.length + 3));
           }
           script.calls.push({ profile: profileKey(profile), groupId, maxPages: options.maxPages, returned: posts.length });
-          return Effect.succeed({ group: { id: groupId, name: 'Test Puppy Group' }, posts, hasMore: posts.length < script.feed.length });
+          return Effect.succeed({ group: { id: groupId, name: 'Test Puppy Group' }, posts, hasMore: posts.length < script.feed.length, stoppedBy });
         }),
     }),
   );
@@ -105,7 +112,7 @@ const watcherLayer = (script: FeedScript, sent: Sent, addresses?: readonly strin
     ),
   );
 
-const makeScript = (feed: GroupPost[] = []): FeedScript => ({ feed, failWith: null, calls: [] });
+const makeScript = (feed: GroupPost[] = []): FeedScript => ({ feed, failWith: null, failAfterPages: null, calls: [] });
 const makeSent = (): Sent => ({ requests: [], statuses: [] });
 
 const input = (overrides: Partial<GroupWatchInput> = {}): GroupWatchInput => ({
@@ -273,6 +280,22 @@ describe('checkNow', () => {
     }).pipe(Effect.provide(watcherLayer(script, sent)));
   });
 
+  it.effect('a next page that fails before reaching seen posts fails the check, so no gap is recorded', () => {
+    const script = makeScript([post('1', 'old'), post('2', 'old')]);
+    const sent = makeSent();
+    return Effect.gen(function* () {
+      const watch = yield* createWatch();
+      yield* checkNow(watch);
+      script.feed = [...Array.from({ length: 10 }, (_, i) => post(String(100 - i), 'new')), ...script.feed];
+      script.failAfterPages = 1;
+      expect((yield* Effect.flip(checkNow(watch))).code).toBe('FB_BLOCKED');
+      expect((yield* GroupWatchesRepo.use((repo) => repo.recentSeenIds(watch.id))).size).toBe(2);
+      // Once Facebook answers again, the whole gap is read.
+      script.failAfterPages = null;
+      expect((yield* checkNow(watch)).newPosts).toBe(10);
+    }).pipe(Effect.provide(watcherLayer(script, sent)));
+  });
+
   it.effect('a failed check is recorded on the watch, and the next good one clears it', () => {
     const script = makeScript([post('1', 'Pugs')]);
     const sent = makeSent();
@@ -312,7 +335,7 @@ describe('GroupWatchesRepo', () => {
     }).pipe(Effect.provide(watcherLayer(makeScript(), makeSent()))),
   );
 
-  it.effect('pruning keeps seen posts for 180 days and turns old matches into plain seen rows', () =>
+  it.effect("pruning keeps seen posts for 180 days (a watch's newest 100 always), and turns old matches into plain seen rows", () =>
     Effect.gen(function* () {
       const watch = yield* createWatch();
       const repo = yield* GroupWatchesRepo;
@@ -326,7 +349,11 @@ describe('GroupWatchesRepo', () => {
       // Demoted, not forgotten: still seen, so never "new" again.
       expect((yield* repo.recentSeenIds(watch.id)).size).toBe(206);
       yield* repo.prune(181 * 24 * 60 * MINUTE);
-      expect((yield* repo.recentSeenIds(watch.id)).size).toBe(0);
+      const kept = yield* repo.recentSeenIds(watch.id);
+      // The newest 100 stay (the batch's newest post, '100', among them); post '1' is gone.
+      expect(kept.size).toBe(100);
+      expect(kept.has('100')).toBe(true);
+      expect(kept.has('1')).toBe(false);
     }).pipe(Effect.provide(watcherLayer(makeScript(), makeSent()))),
   );
 });

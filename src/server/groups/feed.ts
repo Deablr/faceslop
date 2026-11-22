@@ -219,6 +219,8 @@ export interface LatestPosts {
   readonly posts: readonly GroupPost[];
   /** True when the feed has older posts than these. */
   readonly hasMore: boolean;
+  /** Why reading stopped early: a next page failed (the posts before it are still here). */
+  readonly stoppedBy: AppError | null;
 }
 
 export interface GroupFeeds {
@@ -375,18 +377,19 @@ export const makeGroupFeeds = Effect.fn('Groups.makeGroupFeeds')(function* (brow
         const state = yield* Ref.make(initialState(opened));
         const { next } = makePager(page, groupId, state, scrollCaptureMs);
         const posts: GroupPost[] = [...opened.posts];
+        let stoppedBy: AppError | null = null;
         for (let i = 0; i < readOptions.maxPages; i++) {
           if (!(yield* Ref.get(state)).hasMore || !readOptions.more(posts)) break;
           const fetched = yield* Effect.result(next);
           if (Result.isFailure(fetched)) {
-            // What was read is still worth recording; with nothing read, the check failed.
-            if (posts.length > 0) break;
-            return yield* fetched.failure;
+            // The caller decides whether what was read is enough (see LatestPosts.stoppedBy).
+            stoppedBy = fetched.failure;
+            break;
           }
           if (fetched.success.length === 0) break;
           posts.push(...fetched.success);
         }
-        return { group: opened.group, posts, hasMore: (yield* Ref.get(state)).hasMore } satisfies LatestPosts;
+        return { group: opened.group, posts, hasMore: (yield* Ref.get(state)).hasMore, stoppedBy } satisfies LatestPosts;
       }),
     );
   });

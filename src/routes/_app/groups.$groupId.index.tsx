@@ -54,7 +54,8 @@ function GroupPage() {
 function GroupView({ groupId }: { readonly groupId: string }) {
   const { tab = 'posts' } = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
-  const feed = useInfiniteQuery(groupFeedQuery(groupId));
+  // Loaded from Facebook only once the posts are shown (not for a visit to the Matches tab).
+  const feed = useInfiniteQuery({ ...groupFeedQuery(groupId), enabled: tab === 'posts' });
   const { data: watches } = useQuery(groupWatchesQuery);
   const { data: joined } = useQuery({ ...joinedGroupsQuery, enabled: false });
   const watch = watches?.find((w) => w.groupId === groupId);
