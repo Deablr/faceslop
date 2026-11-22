@@ -20,4 +20,15 @@ export const queryKeys = {
   searches: ['search'] as const,
   search: (params: SearchParams) => ['search', params] as const,
   remoteView: ['remote-view'] as const,
+  /** Everything read from Facebook groups (as this browser's account). */
+  groups: ['groups'] as const,
+  joinedGroups: ['groups', 'joined'] as const,
+  groupFeed: (groupId: string) => ['groups', 'feed', groupId] as const,
+  groupPost: (groupId: string, postId: string) => ['groups', 'post', groupId, postId] as const,
+  groupWatches: ['group-watches'] as const,
+  groupWatchMatchLists: ['group-watch-matches'] as const,
+  groupWatchMatches: (id: number) => ['group-watch-matches', id] as const,
+  webhooks: ['webhooks'] as const,
+  webhookDeliveryLists: ['webhook-deliveries'] as const,
+  webhookDeliveries: (id: number) => ['webhook-deliveries', id] as const,
 };

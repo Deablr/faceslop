@@ -18,6 +18,7 @@ import {
   updateSavedSearch,
   type CheckerTimingShape,
 } from '@/server/checker/Checker';
+import { BackgroundLane } from '@/server/checker/BackgroundLane';
 import { AppConfig } from '@/server/config';
 import { RepositoriesLayerMemory } from '@/server/db/layers';
 import { ClientSessionsRepo } from '@/server/db/repositories/ClientSessionsRepo';
@@ -166,6 +167,7 @@ const checkerLayer = (script: Script, options: CheckerLayerOptions = {}) => {
     Layer.provide(fakeMarketplace(script)),
     Layer.provide(AppConfig.layerTest({ dataDir: '/nonexistent/faceslop-test', disableChecker: options.background !== true })),
     Layer.provide(Layer.succeed(CheckerTiming, pacing)),
+    Layer.provide(BackgroundLane.layer),
   );
 };
 

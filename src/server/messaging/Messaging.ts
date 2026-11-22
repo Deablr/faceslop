@@ -100,7 +100,7 @@ const make = Effect.fnUntraced(function* (options: MessagingOptions = {}) {
 
   const sendMessage = Effect.fn('Messaging.sendMessage')(function* (userId: FbUserId, listingId: ListingId, text: string) {
     const id = listingId.trim();
-    const url = remoteTargetUrl('listing', id);
+    const url = remoteTargetUrl('listing', { listingId: id });
     if (url === null) return yield* new AppError({ code: 'BAD_REQUEST', message: 'Invalid listing id.' });
     const body = text.trim();
     if (body === '') return yield* new AppError({ code: 'BAD_REQUEST', message: 'Write a message first.' });

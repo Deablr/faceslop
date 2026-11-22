@@ -14,26 +14,45 @@
 //
 // Input events can carry passwords (the user types into Facebook's login form): never log them.
 import { Schema } from 'effect';
-import { ListingId } from './domain';
+import { FbId, GroupId, GroupPostId, ListingId } from './domain';
 
 /** Places the focused (Marketplace-only) view can open to (legacy FocusTarget). */
 export const FocusTarget = Schema.Literals(['inbox', 'selling', 'create', 'listing']);
 export type FocusTarget = typeof FocusTarget.Type;
 
-/** Everything the remote view can show: Facebook login, or a Marketplace-only page. */
-export const RemoteTarget = Schema.Literals(['login', 'inbox', 'selling', 'create', 'listing']);
+/**
+ * Everything the remote view can show: Facebook login, a Marketplace-only page, one group post
+ * (to comment on it), or one Messenger thread with a person (to message a group post's author).
+ */
+export const RemoteTarget = Schema.Literals(['login', 'inbox', 'selling', 'create', 'listing', 'groupPost', 'message']);
 export type RemoteTarget = typeof RemoteTarget.Type;
 
 export const OpenRemoteViewRequest = Schema.Struct({
   target: RemoteTarget,
   /** Required when target is 'listing'. */
   listingId: Schema.optionalKey(ListingId),
+  /** Required when target is 'groupPost'. */
+  groupId: Schema.optionalKey(GroupId),
+  /** Required when target is 'groupPost'. */
+  postId: Schema.optionalKey(GroupPostId),
+  /** Required when target is 'message': the Facebook user to message. */
+  userId: Schema.optionalKey(FbId),
 }).check(
-  Schema.makeFilter((r) =>
-    r.target === 'listing' && r.listingId === undefined
-      ? { path: ['listingId'], issue: 'is required when target is "listing"' }
-      : undefined,
-  ),
+  Schema.makeFilter((r) => {
+    if (r.target === 'listing' && r.listingId === undefined) {
+      return { path: ['listingId'], issue: 'is required when target is "listing"' };
+    }
+    if (r.target === 'groupPost' && r.groupId === undefined) {
+      return { path: ['groupId'], issue: 'is required when target is "groupPost"' };
+    }
+    if (r.target === 'groupPost' && r.postId === undefined) {
+      return { path: ['postId'], issue: 'is required when target is "groupPost"' };
+    }
+    if (r.target === 'message' && r.userId === undefined) {
+      return { path: ['userId'], issue: 'is required when target is "message"' };
+    }
+    return undefined;
+  }),
 );
 export type OpenRemoteViewRequest = typeof OpenRemoteViewRequest.Type;
 

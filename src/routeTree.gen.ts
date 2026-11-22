@@ -19,8 +19,11 @@ import { Route as AppSearchRouteImport } from './routes/_app/search'
 import { Route as AppSellingRouteImport } from './routes/_app/selling'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as AppGroupsIndexRouteImport } from './routes/_app/groups.index'
 import { Route as AppItemIdRouteImport } from './routes/_app/item.$id'
 import { Route as ApiRemoteStreamRouteImport } from './routes/api/remote/stream'
+import { Route as AppGroupsGroupIdIndexRouteImport } from './routes/_app/groups.$groupId.index'
+import { Route as AppGroupsGroupIdPostsPostIdRouteImport } from './routes/_app/groups.$groupId.posts.$postId'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -71,6 +74,11 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppGroupsIndexRoute = AppGroupsIndexRouteImport.update({
+  id: '/groups/',
+  path: '/groups/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppItemIdRoute = AppItemIdRouteImport.update({
   id: '/item/$id',
   path: '/item/$id',
@@ -81,6 +89,17 @@ const ApiRemoteStreamRoute = ApiRemoteStreamRouteImport.update({
   path: '/api/remote/stream',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppGroupsGroupIdIndexRoute = AppGroupsGroupIdIndexRouteImport.update({
+  id: '/groups/$groupId/',
+  path: '/groups/$groupId/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppGroupsGroupIdPostsPostIdRoute =
+  AppGroupsGroupIdPostsPostIdRouteImport.update({
+    id: '/groups/$groupId/posts/$postId',
+    path: '/groups/$groupId/posts/$postId',
+    getParentRoute: () => AppRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -94,6 +113,9 @@ export interface FileRoutesByFullPath {
   '/api/health': typeof ApiHealthRoute
   '/item/$id': typeof AppItemIdRoute
   '/api/remote/stream': typeof ApiRemoteStreamRoute
+  '/groups/': typeof AppGroupsIndexRoute
+  '/groups/$groupId/': typeof AppGroupsGroupIdIndexRoute
+  '/groups/$groupId/posts/$postId': typeof AppGroupsGroupIdPostsPostIdRoute
 }
 export interface FileRoutesByTo {
   '/closed': typeof ClosedRoute
@@ -107,6 +129,9 @@ export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/item/$id': typeof AppItemIdRoute
   '/api/remote/stream': typeof ApiRemoteStreamRoute
+  '/groups': typeof AppGroupsIndexRoute
+  '/groups/$groupId': typeof AppGroupsGroupIdIndexRoute
+  '/groups/$groupId/posts/$postId': typeof AppGroupsGroupIdPostsPostIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -122,6 +147,9 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/item/$id': typeof AppItemIdRoute
   '/api/remote/stream': typeof ApiRemoteStreamRoute
+  '/_app/groups/': typeof AppGroupsIndexRoute
+  '/_app/groups/$groupId/': typeof AppGroupsGroupIdIndexRoute
+  '/_app/groups/$groupId/posts/$postId': typeof AppGroupsGroupIdPostsPostIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -137,6 +165,9 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/item/$id'
     | '/api/remote/stream'
+    | '/groups/'
+    | '/groups/$groupId/'
+    | '/groups/$groupId/posts/$postId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/closed'
@@ -150,6 +181,9 @@ export interface FileRouteTypes {
     | '/'
     | '/item/$id'
     | '/api/remote/stream'
+    | '/groups'
+    | '/groups/$groupId'
+    | '/groups/$groupId/posts/$postId'
   id:
     | '__root__'
     | '/_app'
@@ -164,6 +198,9 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/item/$id'
     | '/api/remote/stream'
+    | '/_app/groups/'
+    | '/_app/groups/$groupId/'
+    | '/_app/groups/$groupId/posts/$postId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -245,6 +282,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/groups/': {
+      id: '/_app/groups/'
+      path: '/groups'
+      fullPath: '/groups/'
+      preLoaderRoute: typeof AppGroupsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/item/$id': {
       id: '/_app/item/$id'
       path: '/item/$id'
@@ -259,6 +303,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiRemoteStreamRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/groups/$groupId/': {
+      id: '/_app/groups/$groupId/'
+      path: '/groups/$groupId'
+      fullPath: '/groups/$groupId/'
+      preLoaderRoute: typeof AppGroupsGroupIdIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/groups/$groupId/posts/$postId': {
+      id: '/_app/groups/$groupId/posts/$postId'
+      path: '/groups/$groupId/posts/$postId'
+      fullPath: '/groups/$groupId/posts/$postId'
+      preLoaderRoute: typeof AppGroupsGroupIdPostsPostIdRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -271,6 +329,9 @@ interface AppRouteChildren {
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppItemIdRoute: typeof AppItemIdRoute
+  AppGroupsIndexRoute: typeof AppGroupsIndexRoute
+  AppGroupsGroupIdIndexRoute: typeof AppGroupsGroupIdIndexRoute
+  AppGroupsGroupIdPostsPostIdRoute: typeof AppGroupsGroupIdPostsPostIdRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -282,6 +343,9 @@ const AppRouteChildren: AppRouteChildren = {
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
   AppItemIdRoute: AppItemIdRoute,
+  AppGroupsIndexRoute: AppGroupsIndexRoute,
+  AppGroupsGroupIdIndexRoute: AppGroupsGroupIdIndexRoute,
+  AppGroupsGroupIdPostsPostIdRoute: AppGroupsGroupIdPostsPostIdRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

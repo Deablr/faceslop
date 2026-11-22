@@ -39,6 +39,7 @@ const FROM_FACEBOOK: ReadonlySet<unknown> = new Set([
   queryKeys.savedSearchRuns[0],
   queryKeys.listings[0],
   queryKeys.locationLookups[0],
+  queryKeys.groups[0],
 ]);
 
 /** The data owner's own lists: never shown to anyone else, not even while they refetch. */
@@ -48,6 +49,10 @@ const OWNER_DATA: ReadonlySet<unknown> = new Set([
   queryKeys.hidden[0],
   queryKeys.blockedSellers[0],
   queryKeys.settings[0],
+  queryKeys.groupWatches[0],
+  queryKeys.groupWatchMatchLists[0],
+  queryKeys.webhooks[0],
+  queryKeys.webhookDeliveryLists[0],
 ]);
 
 const isAppAuth = (q: Query): boolean => q.queryKey[0] === queryKeys.appAuth[0];
@@ -72,8 +77,9 @@ function reloadLocal(queryClient: QueryClient, leave: (q: Query) => boolean): vo
  * Whose data this browser shows changed: it logged in to Facebook (its data is now the account's)
  * or logged out (back to its own). The owner's lists start over rather than being invalidated:
  * route loaders read the cache with `staleTime: 'static'`, which ignores invalidation, and would
- * render the previous owner's lists until the refetch returns. Saved-search runs ("View new") are
- * dropped (a run only executes when shown; another owner's id is NOT_FOUND). Other local queries
+ * render the previous owner's lists until the refetch returns. Saved-search runs ("View new") and
+ * everything read from groups (as the previous account) are dropped (a run only executes when
+ * shown; another owner's id is NOT_FOUND). Other local queries
  * (remote-view state, categories, ...) refetch, failed ones start over, and Facebook results stay
  * (onSessionChanged). The Facebook status was just stored by the caller and the app-lock status
  * belongs to the browser: both are left alone.
@@ -82,6 +88,8 @@ export function onDataOwnerChanged(queryClient: QueryClient): void {
   const isOwnerData = (q: Query): boolean => OWNER_DATA.has(q.queryKey[0]);
   void queryClient.resetQueries({ predicate: isOwnerData });
   queryClient.removeQueries({ queryKey: queryKeys.savedSearchRuns });
+  // Groups were read as the previous account (its groups, its private groups' posts).
+  queryClient.removeQueries({ queryKey: queryKeys.groups });
   reloadLocal(queryClient, (q) => isAppAuth(q) || isAuth(q) || isOwnerData(q));
 }
 

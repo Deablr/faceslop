@@ -3,7 +3,7 @@
 // test/remote-view-unit.test.ts). Port of legacy/src/server/fb/focus.ts `focusUrl`.
 import '@tanstack/react-start/server-only';
 import { FB_ORIGIN } from '@/server/browser/Browser';
-import type { KeyModifiers, RemoteTarget } from '@/shared/remote-view';
+import type { KeyModifiers, OpenRemoteViewRequest, RemoteTarget } from '@/shared/remote-view';
 
 export const MARKETPLACE_URL = `${FB_ORIGIN}/marketplace/`;
 /** Facebook's login page, returning to Marketplace afterwards. */
@@ -23,19 +23,35 @@ export const REMOTE_TARGETS: Readonly<Record<RemoteTarget, TargetInfo>> = {
   selling: { path: '/marketplace/you/selling/', label: 'your listings', needsLogin: true },
   create: { path: '/marketplace/create/item/', label: 'a new listing', needsLogin: true },
   listing: { path: '/marketplace/item/', label: 'the listing', needsLogin: false },
+  groupPost: { path: '/groups/', label: 'the group post', needsLogin: true },
+  message: { path: '/messages/t/', label: 'Messenger', needsLogin: true },
 };
 
 /** Marketplace ids are numeric; anything longer than 20 digits sends Facebook into a redirect loop. */
 const LISTING_ID = /^\d{1,20}$/;
+/** Group, post and user ids are numeric too. */
+const NUMERIC_ID = /^\d{1,25}$/;
 
-/** The facebook.com URL a target opens, or null when a listing target has no usable listing id. */
-export function remoteTargetUrl(target: RemoteTarget, listingId?: string): string | null {
+/** The ids a target needs (see OpenRemoteViewRequest). */
+export type RemoteTargetIds = Partial<Pick<OpenRemoteViewRequest, 'listingId' | 'groupId' | 'postId' | 'userId'>>;
+
+/** The facebook.com URL a target opens, or null when the target lacks a usable id. */
+export function remoteTargetUrl(target: RemoteTarget, ids: RemoteTargetIds = {}): string | null {
   switch (target) {
     case 'login':
       return LOGIN_URL;
     case 'listing': {
-      const id = listingId?.trim() ?? '';
+      const id = ids.listingId?.trim() ?? '';
       return LISTING_ID.test(id) ? `${FB_ORIGIN}${REMOTE_TARGETS.listing.path}${id}/` : null;
+    }
+    case 'groupPost': {
+      const groupId = ids.groupId?.trim() ?? '';
+      const postId = ids.postId?.trim() ?? '';
+      return NUMERIC_ID.test(groupId) && NUMERIC_ID.test(postId) ? `${FB_ORIGIN}/groups/${groupId}/posts/${postId}/` : null;
+    }
+    case 'message': {
+      const userId = ids.userId?.trim() ?? '';
+      return NUMERIC_ID.test(userId) ? `${FB_ORIGIN}${REMOTE_TARGETS.message.path}${userId}/` : null;
     }
     case 'inbox':
     case 'selling':

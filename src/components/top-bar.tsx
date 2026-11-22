@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { Bookmark, MessageCircle, Search, Settings, Tag, type LucideIcon } from 'lucide-react';
+import { Bookmark, MessageCircle, Search, Settings, Tag, Users, type LucideIcon } from 'lucide-react';
 import { Logo } from '@/components/logo';
 import { SearchBox } from '@/components/search-box';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { buttonVariants } from '@/components/ui/button';
 import { authStatusQuery } from '@/lib/queries';
 
-type NavPath = '/' | '/saved' | '/messages' | '/selling' | '/settings';
+type NavPath = '/' | '/saved' | '/groups' | '/messages' | '/selling' | '/settings';
 
 interface NavItem {
   readonly to: NavPath;
@@ -19,6 +19,7 @@ interface NavItem {
 const NAV: readonly NavItem[] = [
   { to: '/', label: 'Search', icon: Search, matches: (p) => p === '/' || p.startsWith('/search') || p.startsWith('/item') },
   { to: '/saved', label: 'Saved', icon: Bookmark, matches: (p) => p.startsWith('/saved') },
+  { to: '/groups', label: 'Groups', icon: Users, matches: (p) => p.startsWith('/groups') },
   { to: '/messages', label: 'Messages', icon: MessageCircle, matches: (p) => p.startsWith('/messages') },
   { to: '/selling', label: 'Selling', icon: Tag, matches: (p) => p.startsWith('/selling') },
   { to: '/settings', label: 'Settings', icon: Settings, matches: (p) => p.startsWith('/settings') },
@@ -93,7 +94,7 @@ export function MobileNav() {
   const pathname = usePathname();
   return (
     <nav aria-label="Main" className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t bg-background/90 backdrop-blur-md md:hidden">
-      <ul className="mx-auto grid max-w-md grid-cols-5">
+      <ul className="mx-auto grid max-w-md grid-cols-6">
         {NAV.map(({ to, label, icon: Icon, matches }) => (
           <li key={to}>
             <Link
